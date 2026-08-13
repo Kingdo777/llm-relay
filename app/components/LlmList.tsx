@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { LlmRow, LlmInput, TestResult, Protocol } from "@/lib/types";
+import type { LlmRow, LlmInput, ProtocolSupportResult } from "@/lib/types";
 import { LlmForm } from "./LlmForm";
 import { CopyButton } from "./CopyButton";
 import { useToast } from "./Toast";
@@ -20,9 +20,7 @@ export function LlmList() {
   const [editing, setEditing] = useState<LlmRow | null>(null);
   const [showForm, setShowForm] = useState(false);
 
-  const [testStates, setTestStates] = useState<
-    Record<string, { testing: boolean; result: TestResult | null }>
-  >({});
+  const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<LlmRow | null>(null);
 
   async function load() {
@@ -60,8 +58,7 @@ export function LlmList() {
           alias: l.alias,
           token: l.token,
           model_name: l.model_name,
-          openai_base_url: l.openai_base_url,
-          anthropic_base_url: l.anthropic_base_url,
+          base_url: l.base_url,
           enabled,
         }),
       });
@@ -73,36 +70,23 @@ export function LlmList() {
     }
   }
 
-  async function testOne(l: LlmRow, protocol: Protocol) {
-    const key = `${l.id}-${protocol}`;
-    setTestStates((s) => ({ ...s, [key]: { testing: true, result: null } }));
+  async function testOne(l: LlmRow) {
+    setTestingIds((current) => new Set(current).add(l.id));
     try {
-      const resp = await fetch(
-        `/api/llms/${l.id}/test?protocol=${protocol}`,
-        { method: "POST" }
-      );
+      const resp = await fetch(`/api/llms/${l.id}/test`, { method: "POST" });
       const data = await resp.json();
-      const result: TestResult = data.ok
-        ? (data.data as TestResult)
-        : { success: false, message: data.error || "测试失败" };
-      setTestStates((s) => ({
-        ...s,
-        [key]: { testing: false, result },
-      }));
-      show(
-        result.success
-          ? `「${l.name}」${protocol} 测试通过`
-          : `「${l.name}」${protocol} 测试失败`,
-        result.success ? "success" : "error"
-      );
+      if (!resp.ok || !data.ok) throw new Error(data.error || "测试失败");
+      const result = data.data as ProtocolSupportResult;
+      show(`「${l.name}」兼容性：OpenAI ${result.openai.success ? "支持" : "不支持"}，Anthropic ${result.anthropic.success ? "支持" : "不支持"}`, "success");
+      await load();
     } catch (e) {
-      setTestStates((s) => ({
-        ...s,
-        [key]: {
-          testing: false,
-          result: { success: false, message: (e as Error).message },
-        },
-      }));
+      show(`测试失败：${(e as Error).message}`, "error");
+    } finally {
+      setTestingIds((current) => {
+        const next = new Set(current);
+        next.delete(l.id);
+        return next;
+      });
     }
   }
 
@@ -130,8 +114,7 @@ export function LlmList() {
         alias,
         token: l.token,
         model_name: l.model_name,
-        openai_base_url: l.openai_base_url,
-        anthropic_base_url: l.anthropic_base_url,
+        base_url: l.base_url,
         enabled: !!l.enabled,
       };
       try {
@@ -173,7 +156,7 @@ export function LlmList() {
         <div>
           <h1>LLM 管理</h1>
           <div className="sub">
-            每条 LLM 通过别名（作为对外模型名）路由，分 OpenAI / Anthropic 两个 baseURL
+            每条 LLM 使用一个 Base URL，relay 自动识别请求协议并直连对应端点
           </div>
         </div>
         <button className="btn btn-primary" onClick={openCreate}>
@@ -255,23 +238,23 @@ export function LlmList() {
       )}
 
       {list && list.length > 0 && (
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap llm-table-wrap">
+          <table className="llm-table">
             <thead>
               <tr>
                 <th>名称</th>
                 <th>别名（model）</th>
                 <th>真实模型名</th>
-                <th>OpenAI baseURL</th>
-                <th>Anthropic baseURL</th>
+                <th>Base URL</th>
+                <th>协议兼容性</th>
                 <th>启用</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {list.map((l) => {
-                const oaiState = testStates[`${l.id}-openai`];
-                const antState = testStates[`${l.id}-anthropic`];
+                const testing = testingIds.has(l.id);
+                const supportLabel = (value: 0 | 1 | null) => value === null ? "未测试" : value ? "支持" : "不支持";
                 return (
                   <tr key={l.id}>
                     <td>{l.name}</td>
@@ -284,113 +267,21 @@ export function LlmList() {
                       </span>
                     </td>
                     <td className="mono">{l.model_name}</td>
-                    <td className="mono" style={{ maxWidth: 200 }}>
-                      {l.openai_base_url ? (
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 6,
-                          }}
-                        >
-                          <div
-                            style={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                            title={l.openai_base_url}
-                          >
-                            {l.openai_base_url}
-                          </div>
-                          <div className="row-actions">
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => testOne(l, "openai")}
-                              disabled={oaiState?.testing}
-                            >
-                              {oaiState?.testing ? (
-                                <span className="spinner" />
-                              ) : (
-                                <span>🧪</span>
-                              )}
-                              <span>测</span>
-                            </button>
-                          </div>
-                          {oaiState?.result && (
-                            <div
-                              className={`test-result ${
-                                oaiState.result.success ? "ok" : "fail"
-                              }`}
-                              style={{ marginTop: 0 }}
-                            >
-                              <div className="title">
-                                {oaiState.result.success ? "✓" : "✗"}{" "}
-                                {oaiState.result.message}
-                              </div>
-                              {oaiState.result.detail && (
-                                <pre>{oaiState.result.detail}</pre>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
+                    <td className="mono" style={{ maxWidth: 260 }}>
+                      <span className="url-cell">
+                        <span className="url-text" title={l.base_url}>{l.base_url}</span>
+                        <CopyButton value={l.base_url} iconOnly />
+                      </span>
                     </td>
-                    <td className="mono" style={{ maxWidth: 200 }}>
-                      {l.anthropic_base_url ? (
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 6,
-                          }}
-                        >
-                          <div
-                            style={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                            title={l.anthropic_base_url}
-                          >
-                            {l.anthropic_base_url}
-                          </div>
-                          <div className="row-actions">
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => testOne(l, "anthropic")}
-                              disabled={antState?.testing}
-                            >
-                              {antState?.testing ? (
-                                <span className="spinner" />
-                              ) : (
-                                <span>🧪</span>
-                              )}
-                              <span>测</span>
-                            </button>
-                          </div>
-                          {antState?.result && (
-                            <div
-                              className={`test-result ${
-                                antState.result.success ? "ok" : "fail"
-                              }`}
-                              style={{ marginTop: 0 }}
-                            >
-                              <div className="title">
-                                {antState.result.success ? "✓" : "✗"}{" "}
-                                {antState.result.message}
-                              </div>
-                              {antState.result.detail && (
-                                <pre>{antState.result.detail}</pre>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
+                    <td>
+                      <div className="protocol-supports">
+                        <span className={`protocol-badge ${l.openai_supported === null ? "unknown" : l.openai_supported ? "supported" : "unsupported"}`}>
+                          OpenAI · {supportLabel(l.openai_supported)}
+                        </span>
+                        <span className={`protocol-badge ${l.anthropic_supported === null ? "unknown" : l.anthropic_supported ? "supported" : "unsupported"}`}>
+                          Anthropic · {supportLabel(l.anthropic_supported)}
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <label className="toggle">
@@ -404,6 +295,14 @@ export function LlmList() {
                     </td>
                     <td>
                       <div className="row-actions">
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => testOne(l)}
+                          disabled={testing}
+                        >
+                          {testing ? <span className="spinner" /> : null}
+                          {testing ? "测试中…" : "测试兼容性"}
+                        </button>
                         <button
                           className="btn btn-sm"
                           onClick={() => openEdit(l)}

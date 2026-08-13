@@ -3,16 +3,31 @@
 /** LLM 协议类型 */
 export type Protocol = "openai" | "anthropic";
 
+export type ParsedLogBlock =
+  | { type: "text"; text: string; format: "markdown" | "plain" }
+  | { type: "tool"; name: string; input?: unknown; output?: unknown }
+  | { type: "data"; label: string; value: unknown };
+
+export interface ParsedLogEntry {
+  role: string;
+  blocks: ParsedLogBlock[];
+}
+
+export interface ParsedLogContent {
+  entries: ParsedLogEntry[];
+  metadata?: Record<string, unknown>;
+  warnings?: string[];
+}
+
 /**
  * LLM 配置（数据库行结构）。
  *
  * - alias：别名，作为对外的"模型名"，客户端把 model 填成这个值来选中该 LLM
- * - openai_base_url：OpenAI 协议时使用的后端 base url（可只填一个）
- * - anthropic_base_url：Anthropic 协议时使用的后端 base url（可只填一个）
+ * - base_url：统一的后端根地址；relay 根据请求路径拼接对应协议端点
  *
  * 中转入口固定为 http://host/，请求路径末段决定协议：
- *   .../v1/chat/completions → OpenAI（用 openai_base_url）
- *   .../v1/messages          → Anthropic（用 anthropic_base_url）
+ *   .../v1/chat/completions → OpenAI
+ *   .../v1/messages          → Anthropic
  */
 export interface LlmRow {
   id: number;
@@ -20,10 +35,10 @@ export interface LlmRow {
   name: string;
   /** 别名 = 对外的 model 名，全局唯一；客户端把 model 填成它来选中本 LLM */
   alias: string;
-  /** OpenAI 协议后端 base url；为空表示不支持 OpenAI 入口 */
-  openai_base_url: string | null;
-  /** Anthropic 协议后端 base url；为空表示不支持 Anthropic 入口 */
-  anthropic_base_url: string | null;
+  base_url: string;
+  openai_supported: 0 | 1 | null;
+  anthropic_supported: 0 | 1 | null;
+  protocols_tested_at: string | null;
   token: string;
   model_name: string;
   enabled: 0 | 1;
@@ -35,8 +50,7 @@ export interface LlmRow {
 export interface LlmInput {
   name: string;
   alias: string;
-  openai_base_url?: string | null;
-  anthropic_base_url?: string | null;
+  base_url: string;
   token: string;
   model_name: string;
   enabled?: boolean;
@@ -61,6 +75,10 @@ export interface LogRow {
   duration_ms: number;
   status_code: number | null;
   created_at: string;
+  parsed_input: string | null;
+  parsed_output: string | null;
+  parsed_at: string | null;
+  parser_version: number | null;
 }
 
 /** 测试连接结果 */
@@ -70,6 +88,12 @@ export interface TestResult {
   /** 实际响应内容或错误详情 */
   detail?: string;
   duration_ms?: number;
+}
+
+export interface ProtocolSupportResult {
+  openai: TestResult;
+  anthropic: TestResult;
+  tested_at: string;
 }
 
 /** 统一 API 响应包装（用于 CRUD 等接口，中转接口除外） */

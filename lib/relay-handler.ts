@@ -16,11 +16,8 @@ import type { Protocol } from "@/lib/types";
  *   /v1/messages          → anthropic
  *
  * 后端协议由该 LLM 配置的 baseURL 决定：
- *   - 若配了与客户端同协议的 baseURL → 同格式透传
- *   - 否则回退到另一种协议的 baseURL → 跨格式转换
- *   - 两种都没配 → 报错
- *
- * 因此一个只配了 Anthropic baseURL 的 LLM，仍能用 OpenAI 客户端访问。
+ *   - 配了与客户端同协议的 baseURL → 同格式透传
+ *   - 未配置同协议 baseURL → 报错，不执行格式转换
  */
 export async function handleRelay(
   req: Request,
@@ -63,25 +60,14 @@ export async function handleRelay(
     );
   }
 
-  // 4) 选后端协议与 baseURL（含跨格式回退）
+  // 4) 严格按客户端协议选择同协议后端
   const backend = pickBackend(llm, clientProtocol);
-  if (!backend) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `LLM「${llm.alias}」未配置任何 baseURL，无法中转。`,
-      },
-      { status: 502 }
-    );
-  }
-
   // 5) 执行中转
   const result = await relayRequest(
     llm,
     clientProtocol,
     backend.backendProtocol,
     backend.baseUrl,
-    backend.converted,
     req.method,
     req.headers,
     rawBody

@@ -24,11 +24,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const { name, alias, token, model_name, openai_base_url, anthropic_base_url } =
-    body;
-  if (!name || !alias || !token || !model_name) {
-    return NextResponse.json(
-      { ok: false, error: "name / alias / token / model_name 均为必填" },
+	const { name, alias, token, model_name, base_url } = body;
+	if (!name || !alias || !token || !model_name || !base_url?.trim()) {
+		return NextResponse.json(
+			{ ok: false, error: "name / alias / token / model_name / base_url 均为必填" },
       { status: 400 }
     );
   }
@@ -42,26 +41,13 @@ export async function POST(req: Request) {
     );
   }
 
-  const oai = openai_base_url?.trim() || "";
-  const ant = anthropic_base_url?.trim() || "";
-  if (!oai && !ant) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "OpenAI baseURL 和 Anthropic baseURL 至少填一个",
-      },
-      { status: 400 }
-    );
-  }
-
   try {
     const created = createLlm({
       name,
       alias,
       token,
       model_name,
-      openai_base_url: oai || null,
-      anthropic_base_url: ant || null,
+			base_url: base_url.trim(),
       enabled: body.enabled,
     });
     return NextResponse.json({ ok: true, data: created }, { status: 201 });

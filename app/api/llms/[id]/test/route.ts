@@ -1,18 +1,17 @@
 import { NextResponse } from "next/server";
-import { getLlm } from "@/lib/db";
+import { getLlm, updateProtocolSupport } from "@/lib/db";
 import { testLlm } from "@/lib/test-llm";
-import type { Protocol } from "@/lib/types";
 
 interface Ctx {
   params: Promise<{ id: string }>;
 }
 
 /**
- * POST /api/llms/[id]/test?protocol=openai|anthropic
+ * POST /api/llms/[id]/test
  *
- * 按指定协议测试；不指定时自动选 LLM 已配置的协议（OpenAI 优先）。
+ * 使用同一个 Base URL 并行探测 OpenAI 与 Anthropic 工具协议。
  */
-export async function POST(req: Request, { params }: Ctx) {
+export async function POST(_req: Request, { params }: Ctx) {
   const { id } = await params;
   const llm = getLlm(Number(id));
   if (!llm)
@@ -21,23 +20,11 @@ export async function POST(req: Request, { params }: Ctx) {
       { status: 404 }
     );
 
-  const url = new URL(req.url);
-  const protoParam = url.searchParams.get("protocol") as Protocol | null;
-
-  let protocol: Protocol;
-  if (protoParam === "openai" || protoParam === "anthropic") {
-    protocol = protoParam;
-  } else if (llm.openai_base_url) {
-    protocol = "openai";
-  } else if (llm.anthropic_base_url) {
-    protocol = "anthropic";
-  } else {
-    return NextResponse.json(
-      { ok: false, error: "该 LLM 未配置任何 baseURL" },
-      { status: 400 }
-    );
-  }
-
-  const result = await testLlm(llm, protocol);
-  return NextResponse.json({ ok: true, data: result });
+	const [openai, anthropic] = await Promise.all([
+		testLlm(llm, "openai"),
+		testLlm(llm, "anthropic"),
+	]);
+	const tested_at = new Date().toISOString();
+	updateProtocolSupport(llm.id, openai.success, anthropic.success, tested_at);
+	return NextResponse.json({ ok: true, data: { openai, anthropic, tested_at } });
 }

@@ -10,29 +10,34 @@ export async function testLlm(
   llm: LlmRow,
   protocol: Protocol
 ): Promise<TestResult> {
-  // 按协议取对应 base url
-  const baseUrl =
-    protocol === "openai" ? llm.openai_base_url : llm.anthropic_base_url;
-  if (!baseUrl) {
-    return {
-      success: false,
-      message: `该 LLM 未配置 ${protocol} 的 baseURL`,
-    };
-  }
-
-  const start = Date.now();
-  const upstreamUrl = buildUpstreamUrl(baseUrl, UPSTREAM_PATH[protocol]);
+	const start = Date.now();
+	const upstreamUrl = buildUpstreamUrl(llm.base_url, UPSTREAM_PATH[protocol]);
   const headers = buildUpstreamHeaders(
     protocol,
     llm.token,
     new Headers({ "content-type": "application/json" })
   );
-  // 非流式、低 max_tokens，只为验证连通性与鉴权
-  const body = {
+  // 除连通性与鉴权外，同时验证 Agent 所需的工具 Schema。只发 hi
+  // 会让部分 OpenAI 上游的伪 Anthropic 入口被误判为兼容。
+  const body: Record<string, unknown> = {
     model: llm.model_name,
-    max_tokens: 16,
-    messages: [{ role: "user", content: "hi" }],
+    max_tokens: 32,
+    messages: [{ role: "user", content: "Reply OK. Do not call the probe tool." }],
   };
+  body.tools = protocol === "anthropic"
+    ? [{
+        name: "relay_protocol_probe",
+        description: "Validate Anthropic tool schema compatibility.",
+        input_schema: { type: "object", properties: {}, additionalProperties: false },
+      }]
+    : [{
+        type: "function",
+        function: {
+          name: "relay_protocol_probe",
+          description: "Validate OpenAI tool schema compatibility.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        },
+      }];
 
   try {
     const resp = await fetch(upstreamUrl, {

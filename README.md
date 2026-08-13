@@ -5,8 +5,8 @@
 ## 功能
 
 - **页面一：LLM 管理** (`/llms`)
-  - 增删改查 LLM 配置：别名、Base URL、Token、模型名、协议、启用开关
-  - **测试**：发一个 `hi`，失败时显示具体原因
+  - 增删改查 LLM 配置：别名、统一 Base URL、Token、模型名、启用开关
+  - **兼容性测试**：一次探测 OpenAI 与 Anthropic 工具协议并持久化支持状态
   - 每条 LLM 旁显示中转地址，带**一键复制 icon**
 - **页面二：请求日志** (`/logs`)
   - 每次中转请求的详情：输入、输出、耗时、HTTP 状态码、成功与否、失败原因
@@ -28,14 +28,12 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 客户端把 **base url 填成 `http://<host>:<port>`**，SDK 会自动拼出上面的路径。
 **model 填成目标 LLM 的别名**（在管理页配置时指定），token 随意填或忽略。
 
-每个 LLM 配置时分两个 baseURL 字段（至少填一个）：
-- **OpenAI baseURL**：OpenAI 协议时用此地址转发（注入 `Authorization: Bearer`）
-- **Anthropic baseURL**：Anthropic 协议时用此地址转发（注入 `x-api-key`）
+每个 LLM 只配置一个 **Base URL**。地址末尾带或不带 `/v1` 均可，relay 会避免重复拼接。
 
 中转逻辑：
 1. 请求路径末段决定协议（`chat/completions`→OpenAI，`messages`→Anthropic）
 2. 请求体里的 `model`（= 别名）决定路由到哪个 LLM
-3. 按协议取该 LLM 对应的 baseURL，注入鉴权头，把 model 覆盖为真实模型名，转发
+3. 使用该 LLM 的统一 Base URL 拼接协议端点，注入对应鉴权头，把 model 覆盖为真实模型名后原样转发
 
 示例（配了别名 `gpt4` 的 LLM）：
 
@@ -43,7 +41,7 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 curl http://localhost:3000/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"gpt4","messages":[{"role":"user","content":"你好"}]}'
-# 中转站把 model 覆盖为该 LLM 配置的真实模型名，转发到其 OpenAI baseURL
+# 中转站把 model 覆盖为该 LLM 配置的真实模型名，转发到统一 Base URL 的 OpenAI 端点
 ```
 
 多个 LLM 用同一个固定地址，靠 model(别名) 区分。

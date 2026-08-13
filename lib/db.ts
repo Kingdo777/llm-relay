@@ -20,7 +20,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -54,13 +54,47 @@ function ensureSchema(db: Database.Database) {
       db.prepare("INSERT INTO __schema (version) VALUES (?)").run(
         SCHEMA_VERSION
       );
-    } else if (row.version !== SCHEMA_VERSION) {
-      db.exec(`DROP TABLE IF EXISTS logs; DROP TABLE IF EXISTS llms;`);
-      createTables(db);
+    } else if (row.version < SCHEMA_VERSION) {
+      migrateSchema(db, row.version);
       db.prepare("UPDATE __schema SET version = ?").run(SCHEMA_VERSION);
+    } else if (row.version > SCHEMA_VERSION) {
+      throw new Error(
+        `数据库 schema 版本 ${row.version} 高于应用支持的 ${SCHEMA_VERSION}`
+      );
     }
   });
   txn.immediate();
+}
+
+function migrateSchema(db: Database.Database, fromVersion: number) {
+  if (fromVersion < 4) {
+    const columns = new Set(
+      (
+        db.prepare("PRAGMA table_info(logs)").all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    );
+    if (!columns.has("parsed_input"))
+      db.exec("ALTER TABLE logs ADD COLUMN parsed_input TEXT");
+    if (!columns.has("parsed_output"))
+      db.exec("ALTER TABLE logs ADD COLUMN parsed_output TEXT");
+    if (!columns.has("parsed_at"))
+      db.exec("ALTER TABLE logs ADD COLUMN parsed_at TEXT");
+    if (!columns.has("parser_version"))
+      db.exec("ALTER TABLE logs ADD COLUMN parser_version INTEGER");
+  }
+  if (fromVersion < 5) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(llms)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("openai_supported"))
+      db.exec("ALTER TABLE llms ADD COLUMN openai_supported INTEGER");
+    if (!columns.has("anthropic_supported"))
+      db.exec("ALTER TABLE llms ADD COLUMN anthropic_supported INTEGER");
+    if (!columns.has("protocols_tested_at"))
+      db.exec("ALTER TABLE llms ADD COLUMN protocols_tested_at TEXT");
+  }
 }
 
 function createTables(db: Database.Database) {
@@ -76,6 +110,9 @@ function createTables(db: Database.Database) {
       enabled           INTEGER NOT NULL DEFAULT 1,
       created_at        TEXT NOT NULL,
       updated_at        TEXT NOT NULL,
+      openai_supported INTEGER,
+      anthropic_supported INTEGER,
+      protocols_tested_at TEXT,
       CHECK (
         (openai_base_url IS NOT NULL AND openai_base_url <> '')
         OR (anthropic_base_url IS NOT NULL AND anthropic_base_url <> '')
@@ -97,6 +134,10 @@ function createTables(db: Database.Database) {
       duration_ms  INTEGER NOT NULL,
       status_code  INTEGER,
       created_at   TEXT NOT NULL,
+      parsed_input TEXT,
+      parsed_output TEXT,
+      parsed_at    TEXT,
+      parser_version INTEGER,
       FOREIGN KEY (llm_id) REFERENCES llms(id) ON DELETE SET NULL
     );
 
@@ -116,21 +157,27 @@ if (process.env.NODE_ENV !== "production") {
 const now = () => new Date().toISOString();
 
 export function listLlms(): LlmRow[] {
-  return db.prepare("SELECT * FROM llms ORDER BY id ASC").all() as LlmRow[];
+	return db.prepare(`${llmSelect} ORDER BY id ASC`).all() as LlmRow[];
 }
 
 export function getLlm(id: number): LlmRow | undefined {
-  return db.prepare("SELECT * FROM llms WHERE id = ?").get(id) as
+	return db.prepare(`${llmSelect} WHERE id = ?`).get(id) as
     | LlmRow
     | undefined;
 }
 
 /** 按别名查找 LLM（别名 = 对外的 model 名） */
 export function getLlmByAlias(alias: string): LlmRow | undefined {
-  return db
-    .prepare("SELECT * FROM llms WHERE alias = ? AND enabled = 1")
+	return db
+		.prepare(`${llmSelect} WHERE alias = ? AND enabled = 1`)
     .get(alias) as LlmRow | undefined;
 }
+
+const llmSelect = `SELECT id, name, alias,
+  COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, '')) AS base_url,
+  token, model_name, enabled, created_at, updated_at,
+  openai_supported, anthropic_supported, protocols_tested_at
+  FROM llms`;
 
 function normalizeUrl(u?: string | null): string | null {
   if (u === undefined || u === null) return null;
@@ -147,8 +194,8 @@ export function createLlm(input: LlmInput): LlmRow {
   ).run(
     input.name,
     input.alias,
-    normalizeUrl(input.openai_base_url),
-    normalizeUrl(input.anthropic_base_url),
+		normalizeUrl(input.base_url),
+		normalizeUrl(input.base_url),
     input.token,
     input.model_name,
     input.enabled === false ? 0 : 1,
@@ -165,24 +212,43 @@ export function updateLlm(
   id: number,
   input: LlmInput
 ): LlmRow | undefined {
-  const existing = getLlm(id);
-  if (!existing) return undefined;
-  db.prepare(
-    `UPDATE llms
-     SET name = ?, alias = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, model_name = ?, enabled = ?, updated_at = ?
-     WHERE id = ?`
-  ).run(
+	const existing = getLlm(id);
+	if (!existing) return undefined;
+	const baseURL = normalizeUrl(input.base_url);
+	const endpointChanged = baseURL !== existing.base_url ||
+		input.token !== existing.token || input.model_name !== existing.model_name;
+	db.prepare(
+		`UPDATE llms
+	 SET name = ?, alias = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, model_name = ?, enabled = ?, updated_at = ?,
+	     openai_supported = ?, anthropic_supported = ?, protocols_tested_at = ?
+	 WHERE id = ?`
+	).run(
     input.name,
     input.alias,
-    normalizeUrl(input.openai_base_url),
-    normalizeUrl(input.anthropic_base_url),
+		baseURL,
+		baseURL,
     input.token,
     input.model_name,
     input.enabled === false ? 0 : 1,
-    now(),
-    id
+		now(),
+		endpointChanged ? null : existing.openai_supported,
+		endpointChanged ? null : existing.anthropic_supported,
+		endpointChanged ? null : existing.protocols_tested_at,
+		id
   );
   return getLlm(id);
+}
+
+export function updateProtocolSupport(
+	id: number, openaiSupported: boolean, anthropicSupported: boolean, testedAt: string
+): void {
+	db.prepare(`UPDATE llms SET openai_supported = ?, anthropic_supported = ?,
+	  protocols_tested_at = ? WHERE id = ?`).run(
+		openaiSupported ? 1 : 0,
+		anthropicSupported ? 1 : 0,
+		testedAt,
+		id,
+	);
 }
 
 export function deleteLlm(id: number): boolean {
@@ -242,6 +308,9 @@ export function updateLog(
   if (patch.output !== undefined) {
     sets.push("output = ?");
     values.push(patch.output);
+    sets.push("parsed_output = NULL");
+    sets.push("parsed_at = NULL");
+    sets.push("parser_version = NULL");
   }
   if (patch.status !== undefined) {
     sets.push("status = ?");
@@ -297,8 +366,40 @@ export function listLogs(opts: {
   return { rows, total };
 }
 
+export function deleteLogs(opts: {
+  llmId?: number;
+  status?: string;
+}): number {
+  const where: string[] = [];
+  const params: (string | number)[] = [];
+  if (opts.llmId !== undefined) {
+    where.push("llm_id = ?");
+    params.push(opts.llmId);
+  }
+  if (opts.status) {
+    where.push("status = ?");
+    params.push(opts.status);
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  return db.prepare(`DELETE FROM logs ${whereSql}`).run(...params).changes;
+}
+
 export function getLog(id: number): LogRow | undefined {
   return db.prepare("SELECT * FROM logs WHERE id = ?").get(id) as
     | LogRow
     | undefined;
+}
+
+export function cacheParsedLog(
+  id: number,
+  parserVersion: number,
+  parsedInput: string,
+  parsedOutput: string
+): LogRow | undefined {
+  db.prepare(
+    `UPDATE logs
+     SET parsed_input = ?, parsed_output = ?, parsed_at = ?, parser_version = ?
+     WHERE id = ? AND (parser_version IS NULL OR parser_version <> ?)`
+  ).run(parsedInput, parsedOutput, now(), parserVersion, id, parserVersion);
+  return getLog(id);
 }

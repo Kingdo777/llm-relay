@@ -36,11 +36,10 @@ export async function PUT(req: Request, { params }: Ctx) {
     );
   }
 
-  const { name, alias, token, model_name, openai_base_url, anthropic_base_url } =
-    body;
-  if (!name || !alias || !token || !model_name) {
-    return NextResponse.json(
-      { ok: false, error: "name / alias / token / model_name 均为必填" },
+	const { name, alias, token, model_name, base_url } = body;
+	if (!name || !alias || !token || !model_name || !base_url?.trim()) {
+		return NextResponse.json(
+			{ ok: false, error: "name / alias / token / model_name / base_url 均为必填" },
       { status: 400 }
     );
   }
@@ -53,23 +52,13 @@ export async function PUT(req: Request, { params }: Ctx) {
       { status: 400 }
     );
   }
-  const oai = openai_base_url?.trim() || "";
-  const ant = anthropic_base_url?.trim() || "";
-  if (!oai && !ant) {
-    return NextResponse.json(
-      { ok: false, error: "两个 baseURL 至少填一个" },
-      { status: 400 }
-    );
-  }
-
   try {
     const updated = updateLlm(numId, {
       name,
       alias,
       token,
       model_name,
-      openai_base_url: oai || null,
-      anthropic_base_url: ant || null,
+			base_url: base_url.trim(),
       enabled: body.enabled,
     });
     if (!updated)

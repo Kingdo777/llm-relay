@@ -27,7 +27,10 @@ export function inferProtocolFromPath(path: string): Protocol | null {
 /** 构造发往后端的完整 URL */
 export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
   const base = baseUrl.replace(/\/+$/, "");
-  const sub = subPath.replace(/^\/+/, "");
+  let sub = subPath.replace(/^\/+/, "");
+  if (base.toLowerCase().endsWith("/v1") && sub.toLowerCase().startsWith("v1/")) {
+    sub = sub.slice(3);
+  }
   if (!sub) return base;
   return `${base}/${sub}`;
 }

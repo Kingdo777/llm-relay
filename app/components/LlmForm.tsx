@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { LlmInput, LlmRow, TestResult, Protocol } from "@/lib/types";
+import type { LlmInput, LlmRow, ProtocolSupportResult } from "@/lib/types";
 import { useToast } from "./Toast";
 
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
@@ -25,37 +25,32 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
 
   const [name, setName] = useState("");
   const [alias, setAlias] = useState("");
-  const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
-  const [anthropicBaseUrl, setAnthropicBaseUrl] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [modelName, setModelName] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [testing, setTesting] = useState<Protocol | null>(null);
-  const [testResults, setTestResults] = useState<
-    Partial<Record<Protocol, TestResult>>
-  >({});
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ProtocolSupportResult | null>(null);
 
   useEffect(() => {
     if (llm) {
       setName(llm.name);
       setAlias(llm.alias);
-      setOpenaiBaseUrl(llm.openai_base_url ?? "");
-      setAnthropicBaseUrl(llm.anthropic_base_url ?? "");
+      setBaseUrl(llm.base_url);
       setToken(llm.token);
       setModelName(llm.model_name);
       setEnabled(!!llm.enabled);
     } else {
       setName("");
       setAlias("");
-      setOpenaiBaseUrl("");
-      setAnthropicBaseUrl("");
+      setBaseUrl("");
       setToken("");
       setModelName("");
       setEnabled(true);
     }
-    setTestResults({});
+    setTestResult(null);
   }, [llm]);
 
   async function save() {
@@ -67,10 +62,9 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       show("别名仅允许字母、数字、下划线、连字符、点", "error");
       return;
     }
-    const oai = openaiBaseUrl.trim();
-    const ant = anthropicBaseUrl.trim();
-    if (!oai && !ant) {
-      show("两个 baseURL 至少填一个", "error");
+    const normalizedBaseURL = baseUrl.trim();
+    if (!normalizedBaseURL) {
+      show("Base URL 为必填", "error");
       return;
     }
 
@@ -79,8 +73,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       alias,
       token,
       model_name: modelName,
-      openai_base_url: oai || null,
-      anthropic_base_url: ant || null,
+      base_url: normalizedBaseURL,
       enabled,
     };
     setSaving(true);
@@ -106,42 +99,30 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     }
   }
 
-  async function testCurrent(protocol: Protocol) {
+  async function testCurrent() {
     if (!isEdit) {
       show("请先保存后再测试", "info");
       return;
     }
-    setTesting(protocol);
-    setTestResults((s) => ({ ...s, [protocol]: null }));
+    setTesting(true);
+    setTestResult(null);
     try {
       const resp = await fetch(
-        `/api/llms/${llm!.id}/test?protocol=${protocol}`,
+        `/api/llms/${llm!.id}/test`,
         { method: "POST" }
       );
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
-        setTestResults((s) => ({
-          ...s,
-          [protocol]: { success: false, message: data.error || "测试失败" },
-        }));
+        show(data.error || "测试失败", "error");
         return;
       }
-      const result = data.data as TestResult;
-      setTestResults((s) => ({ ...s, [protocol]: result }));
-      show(
-        result.success ? `${protocol} 测试通过` : `${protocol} 测试失败`,
-        result.success ? "success" : "error"
-      );
+      const result = data.data as ProtocolSupportResult;
+      setTestResult(result);
+      show("协议兼容性测试完成", "success");
     } catch (e) {
-      setTestResults((s) => ({
-        ...s,
-        [protocol]: {
-          success: false,
-          message: `测试请求出错：${(e as Error).message}`,
-        },
-      }));
+      show(`测试请求出错：${(e as Error).message}`, "error");
     } finally {
-      setTesting(null);
+      setTesting(false);
     }
   }
 
@@ -214,38 +195,23 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
             }}
           >
             <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              后端 baseURL（至少填一个）
+              后端 Base URL
             </div>
             <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
-              分别指定 OpenAI 与 Anthropic 协议使用的后端地址，可只填一个。
-              <br />
-              填了哪个，该 LLM 就支持哪个协议的中转。
+              relay 会根据请求路径选择 OpenAI 或 Anthropic 协议，并从同一个地址拼接对应端点。
             </div>
           </div>
 
           <div className="field">
-            <label>OpenAI baseURL</label>
+            <label>Base URL *</label>
             <input
               className="input"
-              value={openaiBaseUrl}
-              onChange={(e) => setOpenaiBaseUrl(e.target.value)}
-              placeholder="如 https://api.openai.com （留空则不支持 OpenAI 协议）"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="如 https://yibuapi.com 或 https://yibuapi.com/v1"
             />
             <div className="hint">
-              OpenAI 协议时用此地址（请求 /v1/chat/completions）
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Anthropic baseURL</label>
-            <input
-              className="input"
-              value={anthropicBaseUrl}
-              onChange={(e) => setAnthropicBaseUrl(e.target.value)}
-              placeholder="如 https://api.anthropic.com （留空则不支持 Anthropic 协议）"
-            />
-            <div className="hint">
-              Anthropic 协议时用此地址（请求 /v1/messages）
+              自动兼容末尾带或不带 /v1；实际支持哪些协议由测试结果决定。
             </div>
           </div>
 
@@ -296,59 +262,34 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            {openaiBaseUrl.trim() && (
-              <button
-                className="btn"
-                onClick={() => testCurrent("openai")}
-                disabled={testing !== null || !isEdit}
-              >
-                {testing === "openai" ? <span className="spinner" /> : null}
-                {testing === "openai" ? "测试中…" : "🧪 测试 OpenAI"}
-              </button>
-            )}
-            {anthropicBaseUrl.trim() && (
-              <button
-                className="btn"
-                onClick={() => testCurrent("anthropic")}
-                disabled={testing !== null || !isEdit}
-              >
-                {testing === "anthropic" ? <span className="spinner" /> : null}
-                {testing === "anthropic" ? "测试中…" : "🧪 测试 Anthropic"}
-              </button>
-            )}
-            {!openaiBaseUrl.trim() && !anthropicBaseUrl.trim() && (
+            <button
+              className="btn"
+              onClick={() => testCurrent()}
+              disabled={testing || !isEdit}
+            >
+              {testing ? <span className="spinner" /> : null}
+              {testing ? "正在测试两种协议…" : "🧪 测试兼容性"}
+            </button>
+            {!baseUrl.trim() && (
               <span className="muted" style={{ fontSize: 12 }}>
                 填入 baseURL 后可测试
               </span>
             )}
           </div>
 
-          {testResults.openai && (
-            <div
-              className={`test-result ${testResults.openai.success ? "ok" : "fail"}`}
-            >
-              <div className="title">
-                [OpenAI]{" "}
-                {testResults.openai.success ? "✓ 成功" : "✗ 失败"}：{" "}
-                {testResults.openai.message}
-              </div>
-              {testResults.openai.detail && (
-                <pre>{testResults.openai.detail}</pre>
-              )}
-            </div>
-          )}
-          {testResults.anthropic && (
-            <div
-              className={`test-result ${testResults.anthropic.success ? "ok" : "fail"}`}
-            >
-              <div className="title">
-                [Anthropic]{" "}
-                {testResults.anthropic.success ? "✓ 成功" : "✗ 失败"}：{" "}
-                {testResults.anthropic.message}
-              </div>
-              {testResults.anthropic.detail && (
-                <pre>{testResults.anthropic.detail}</pre>
-              )}
+          {testResult && (
+            <div className="protocol-test-row">
+              {(["openai", "anthropic"] as const).map((protocol) => (
+                <div
+                  key={protocol}
+                  className={`test-result ${testResult[protocol].success ? "ok" : "fail"}`}
+                >
+                  <div className="title">
+                    {protocol === "openai" ? "OpenAI" : "Anthropic"} · {" "}
+                    {testResult[protocol].success ? "✓ 支持" : "✗ 不支持"}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import type { LogRow, LlmRow } from "@/lib/types";
+import type { LogRow, LlmRow, ParsedLogContent } from "@/lib/types";
+import { ParsedLogContentView } from "./ParsedLogContent";
 import { useToast } from "./Toast";
 
 const PAGE_SIZE = 50;
@@ -15,10 +16,14 @@ export function LogList() {
   // 筛选
   const [filterLlm, setFilterLlm] = useState<string>(""); // llm id
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // 详情
   const [detail, setDetail] = useState<LogRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [parseLoading, setParseLoading] = useState(false);
+  const [detailView, setDetailView] = useState<"raw" | "parsed">("raw");
 
   async function loadLlms() {
     const resp = await fetch("/api/llms");
@@ -60,12 +65,68 @@ export function LogList() {
     try {
       const resp = await fetch(`/api/logs/${id}`);
       const data = await resp.json();
-      if (data.ok) setDetail(data.data);
+      if (data.ok) {
+        let latest = data.data as LogRow;
+        try {
+          const parseResp = await fetch(`/api/logs/${id}/parse`, { method: "POST" });
+          const parseData = await parseResp.json();
+          if (parseResp.ok && parseData.ok) latest = parseData.data;
+        } catch {
+          // 自动解析失败时仍展示原始日志详情。
+        }
+        setDetail(latest);
+        setDetailView(latest.parsed_input && latest.parsed_output ? "parsed" : "raw");
+      }
       else show(data.error || "加载失败", "error");
     } catch (e) {
       show(`加载失败：${(e as Error).message}`, "error");
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function parseDetail() {
+    if (!detail || parseLoading) return;
+    setParseLoading(true);
+    try {
+      const resp = await fetch(`/api/logs/${detail.id}/parse`, { method: "POST" });
+      const data = await resp.json();
+      if (data.ok) {
+        setDetail(data.data);
+        setDetailView("parsed");
+      } else show(data.error || "解析失败", "error");
+    } catch (e) {
+      show(`解析失败：${(e as Error).message}`, "error");
+    } finally {
+      setParseLoading(false);
+    }
+  }
+
+  function filterParams() {
+    const params = new URLSearchParams();
+    if (filterLlm) params.set("llmId", filterLlm);
+    if (filterStatus) params.set("status", filterStatus);
+    return params;
+  }
+
+  async function deleteFilteredLogs() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const params = filterParams();
+      const resp = await fetch(`/api/logs?${params}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || "删除失败");
+      setShowDeleteConfirm(false);
+      setDetail(null);
+      setPage(0);
+      setRows([]);
+      setTotal(0);
+      show(`已删除 ${data.deleted} 条日志`, "success");
+    } catch (e) {
+      show(`删除失败：${(e as Error).message}`, "error");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -95,6 +156,15 @@ export function LogList() {
     } catch {
       // 非 JSON，原样显示
       return <pre className="code-block">{s}</pre>;
+    }
+  }
+
+  function parsedContent(raw: string | null): ParsedLogContent | null {
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as ParsedLogContent;
+    } catch {
+      return null;
     }
   }
 
@@ -142,6 +212,13 @@ export function LogList() {
           <option value="failed">failed</option>
         </select>
         <div className="spacer" />
+        <button
+          className="btn btn-danger"
+          disabled={!rows || total === 0 || deleting}
+          onClick={() => setShowDeleteConfirm(true)}
+        >
+          删除当前筛选日志{total > 0 ? `（${total}）` : ""}
+        </button>
         <button className="btn" onClick={load}>
           ↻ 刷新
         </button>
@@ -228,14 +305,64 @@ export function LogList() {
         </div>
       )}
 
+      {showDeleteConfirm && (
+        <div className="overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+          <div
+            className="drawer"
+            style={{ width: 440, height: "auto", minHeight: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="drawer-head">
+              <h2>确认清理日志</h2>
+              <button
+                className="btn btn-sm"
+                disabled={deleting}
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="drawer-body">
+              将永久删除当前筛选条件下的 <b>{total}</b> 条日志。
+              {!filterLlm && !filterStatus && (
+                <div className="danger-text" style={{ marginTop: 8 }}>
+                  当前没有筛选条件，这会清空全部请求日志。
+                </div>
+              )}
+            </div>
+            <div className="drawer-foot">
+              <button className="btn" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>
+                取消
+              </button>
+              <button className="btn btn-danger" disabled={deleting} onClick={deleteFilteredLogs}>
+                {deleting ? "删除中…" : "确认删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {(detail || detailLoading) && (
         <div className="overlay" onClick={() => setDetail(null)}>
           <div className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <h2>请求详情 #{detail?.id}</h2>
-              <button className="btn btn-sm" onClick={() => setDetail(null)}>
-                ✕
-              </button>
+              <div className="drawer-actions">
+                {detail && (
+                  <button className="btn btn-sm btn-primary" disabled={parseLoading} onClick={parseDetail}>
+                    {parseLoading ? "解析中…" : detail.parsed_input ? "重新解析" : "解析内容"}
+                  </button>
+                )}
+                {detail?.parsed_input && detail.parsed_output && (
+                  <div className="segmented" aria-label="详情显示方式">
+                    <button className={detailView === "parsed" ? "active" : ""} onClick={() => setDetailView("parsed")}>可读内容</button>
+                    <button className={detailView === "raw" ? "active" : ""} onClick={() => setDetailView("raw")}>原始数据</button>
+                  </div>
+                )}
+                <button className="btn btn-sm" aria-label="关闭详情" onClick={() => setDetail(null)}>
+                  ✕
+                </button>
+              </div>
             </div>
             <div className="drawer-body">
               {detailLoading && <div className="muted">加载中…</div>}
@@ -292,15 +419,29 @@ export function LogList() {
                     </div>
                   )}
 
-                  <div className="detail-row">
-                    <div className="label">输入（Request Body）</div>
-                    {prettyJson(detail.input)}
-                  </div>
-
-                  <div className="detail-row">
-                    <div className="label">输出（Response）</div>
-                    {prettyJson(detail.output)}
-                  </div>
+                  {detailView === "parsed" && detail.parsed_input && detail.parsed_output ? (
+                    <>
+                      <div className="detail-row">
+                        <div className="label">用户输入</div>
+                        <ParsedLogContentView content={parsedContent(detail.parsed_input)!} mode="input" />
+                      </div>
+                      <div className="detail-row">
+                        <div className="label">给用户的输出</div>
+                        <ParsedLogContentView content={parsedContent(detail.parsed_output)!} mode="output" />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="detail-row">
+                        <div className="label">输入（Request Body）</div>
+                        {prettyJson(detail.input)}
+                      </div>
+                      <div className="detail-row">
+                        <div className="label">输出（Response）</div>
+                        {prettyJson(detail.output)}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
