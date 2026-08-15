@@ -20,7 +20,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 7;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -95,6 +95,24 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
     if (!columns.has("protocols_tested_at"))
       db.exec("ALTER TABLE llms ADD COLUMN protocols_tested_at TEXT");
   }
+  if (fromVersion < 6) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(llms)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("openai_responses_supported"))
+      db.exec("ALTER TABLE llms ADD COLUMN openai_responses_supported INTEGER");
+  }
+  if (fromVersion < 7) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(logs)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("is_stream"))
+      db.exec("ALTER TABLE logs ADD COLUMN is_stream INTEGER");
+  }
 }
 
 function createTables(db: Database.Database) {
@@ -112,6 +130,7 @@ function createTables(db: Database.Database) {
       updated_at        TEXT NOT NULL,
       openai_supported INTEGER,
       anthropic_supported INTEGER,
+      openai_responses_supported INTEGER,
       protocols_tested_at TEXT,
       CHECK (
         (openai_base_url IS NOT NULL AND openai_base_url <> '')
@@ -133,6 +152,7 @@ function createTables(db: Database.Database) {
       error        TEXT,
       duration_ms  INTEGER NOT NULL,
       status_code  INTEGER,
+      is_stream    INTEGER,
       created_at   TEXT NOT NULL,
       parsed_input TEXT,
       parsed_output TEXT,
@@ -176,7 +196,7 @@ export function getLlmByAlias(alias: string): LlmRow | undefined {
 const llmSelect = `SELECT id, name, alias,
   COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, '')) AS base_url,
   token, model_name, enabled, created_at, updated_at,
-  openai_supported, anthropic_supported, protocols_tested_at
+  openai_supported, anthropic_supported, openai_responses_supported, protocols_tested_at
   FROM llms`;
 
 function normalizeUrl(u?: string | null): string | null {
@@ -220,7 +240,7 @@ export function updateLlm(
 	db.prepare(
 		`UPDATE llms
 	 SET name = ?, alias = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, model_name = ?, enabled = ?, updated_at = ?,
-	     openai_supported = ?, anthropic_supported = ?, protocols_tested_at = ?
+	     openai_supported = ?, anthropic_supported = ?, openai_responses_supported = ?, protocols_tested_at = ?
 	 WHERE id = ?`
 	).run(
     input.name,
@@ -233,6 +253,7 @@ export function updateLlm(
 		now(),
 		endpointChanged ? null : existing.openai_supported,
 		endpointChanged ? null : existing.anthropic_supported,
+		endpointChanged ? null : existing.openai_responses_supported,
 		endpointChanged ? null : existing.protocols_tested_at,
 		id
   );
@@ -240,12 +261,13 @@ export function updateLlm(
 }
 
 export function updateProtocolSupport(
-	id: number, openaiSupported: boolean, anthropicSupported: boolean, testedAt: string
+	id: number, openaiSupported: boolean, anthropicSupported: boolean, responsesSupported: boolean, testedAt: string
 ): void {
-	db.prepare(`UPDATE llms SET openai_supported = ?, anthropic_supported = ?,
+	db.prepare(`UPDATE llms SET openai_supported = ?, anthropic_supported = ?, openai_responses_supported = ?,
 	  protocols_tested_at = ? WHERE id = ?`).run(
 		openaiSupported ? 1 : 0,
 		anthropicSupported ? 1 : 0,
+		responsesSupported ? 1 : 0,
 		testedAt,
 		id,
 	);
@@ -300,7 +322,7 @@ export function insertLog(log: LogInsert): number {
 export function updateLog(
   id: number,
   patch: Partial<
-    Pick<LogRow, "output" | "status" | "error" | "duration_ms" | "status_code">
+    Pick<LogRow, "output" | "status" | "error" | "duration_ms" | "status_code" | "is_stream">
   >
 ) {
   const sets: string[] = [];
@@ -327,6 +349,10 @@ export function updateLog(
   if (patch.status_code !== undefined) {
     sets.push("status_code = ?");
     values.push(patch.status_code);
+  }
+  if (patch.is_stream !== undefined) {
+    sets.push("is_stream = ?");
+    values.push(patch.is_stream);
   }
   if (sets.length === 0) return;
   values.push(id);

@@ -32,6 +32,54 @@ test("keeps human text from the latest user message and removes system context",
   assert.deepEqual(compacted, { messages: [{ role: "user", content: "current request" }] });
 });
 
+test("strips a leading system-reminder block but keeps the real user text (Claude Code style)", () => {
+  const raw = JSON.stringify({
+    messages: [{
+      role: "user",
+      content:
+        "<system-reminder>\n注入的上下文\n</system-reminder>\n你好，帮我看看日志",
+    }],
+  });
+  const compacted = JSON.parse(compactLogInput(raw, 200_000));
+  assert.deepEqual(compacted, { messages: [{ role: "user", content: "你好，帮我看看日志" }] });
+});
+
+test("strips Claude Code local-command wrappers and keeps only the real user text", () => {
+  const raw = JSON.stringify({
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "<system-reminder>\n注入的上下文\n</system-reminder>" },
+        { type: "text", text: "<local-command-caveat>Caveat: DO NOT respond to these messages.</local-command-caveat>\n" },
+        { type: "text", text: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n" },
+        { type: "text", text: "<local-command-stdout>Set model to yibu-gpt-5.6-sol</local-command-stdout>\n" },
+        { type: "text", text: "hi" },
+      ],
+    }],
+  });
+  const compacted = JSON.parse(compactLogInput(raw, 200_000));
+  assert.deepEqual(compacted, { messages: [{ role: "user", content: "hi" }] });
+});
+
+test("keeps Anthropic single-object text content", () => {
+  const raw = JSON.stringify({
+    messages: [{ role: "user", content: { type: "text", text: "你好" } }],
+  });
+  const compacted = JSON.parse(compactLogInput(raw, 200_000));
+  assert.deepEqual(compacted, { messages: [{ role: "user", content: "你好" }] });
+});
+
+test("returns empty when the latest user message is only injected context (no fallback)", () => {
+  const raw = JSON.stringify({
+    messages: [
+      { role: "user", content: "older real question" },
+      { role: "user", content: "<system-reminder>纯注入上下文</system-reminder>" },
+    ],
+  });
+  const compacted = JSON.parse(compactLogInput(raw, 200_000));
+  assert.deepEqual(compacted, { messages: [] });
+});
+
 test("parses Anthropic request messages", () => {
   const parsed = parseLogInput(JSON.stringify({ messages: [{ role: "user", content: [{ type: "text", text: "# Hello" }, { type: "tool_result", content: "done" }] }] }));
   assert.equal(parsed.entries[0].role, "user");

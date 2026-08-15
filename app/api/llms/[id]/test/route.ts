@@ -9,7 +9,8 @@ interface Ctx {
 /**
  * POST /api/llms/[id]/test
  *
- * 使用同一个 Base URL 并行探测 OpenAI 与 Anthropic 工具协议。
+ * 使用同一个 Base URL 并行探测 OpenAI（Chat Completions / Responses）与
+ * Anthropic 三种协议的工具兼容性。
  */
 export async function POST(_req: Request, { params }: Ctx) {
   const { id } = await params;
@@ -20,11 +21,12 @@ export async function POST(_req: Request, { params }: Ctx) {
       { status: 404 }
     );
 
-	const [openai, anthropic] = await Promise.all([
+	const [openai, openaiResponses, anthropic] = await Promise.all([
 		testLlm(llm, "openai"),
+		testLlm(llm, "openai-responses"),
 		testLlm(llm, "anthropic"),
 	]);
 	const tested_at = new Date().toISOString();
-	updateProtocolSupport(llm.id, openai.success, anthropic.success, tested_at);
-	return NextResponse.json({ ok: true, data: { openai, anthropic, tested_at } });
+	updateProtocolSupport(llm.id, openai.success, anthropic.success, openaiResponses.success, tested_at);
+	return NextResponse.json({ ok: true, data: { openai, openaiResponses, anthropic, tested_at } });
 }

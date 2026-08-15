@@ -13,6 +13,7 @@ import type { Protocol } from "@/lib/types";
  *
  * 客户端协议由请求路径决定：
  *   /v1/chat/completions → openai
+ *   /v1/responses        → openai-responses
  *   /v1/messages          → anthropic
  *
  * 后端协议由该 LLM 配置的 baseURL 决定：

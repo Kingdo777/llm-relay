@@ -3,12 +3,14 @@ import type { Protocol } from "./types";
 /** 各协议对应的后端 API 子路径。 */
 export const UPSTREAM_PATH: Record<Protocol, string> = {
   openai: "v1/chat/completions",
+  "openai-responses": "v1/responses",
   anthropic: "v1/messages",
 };
 
 /**
  * 根据请求路径末段判断协议：
  *   .../v1/chat/completions → openai
+ *   .../v1/responses        → openai-responses
  *   .../v1/messages          → anthropic
  * 无法识别返回 null。
  */
@@ -17,6 +19,9 @@ export function inferProtocolFromPath(path: string): Protocol | null {
   const p = path.replace(/^\/+|\/+$/g, "").toLowerCase();
   if (p.endsWith("v1/chat/completions") || p.endsWith("chat/completions")) {
     return "openai";
+  }
+  if (p.endsWith("v1/responses") || p.endsWith("responses")) {
+    return "openai-responses";
   }
   if (p.endsWith("v1/messages") || p.endsWith("messages")) {
     return "anthropic";
@@ -37,7 +42,9 @@ export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
 
 /**
  * 根据协议构造发往后端的请求头（注入鉴权）。
- * 同格式透传：OpenAI→Authorization: Bearer，Anthropic→x-api-key + anthropic-version。
+ * 同格式透传：
+ *   - openai / openai-responses → Authorization: Bearer
+ *   - anthropic                 → x-api-key + anthropic-version
  */
 export function buildUpstreamHeaders(
   protocol: Protocol,

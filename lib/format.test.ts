@@ -11,4 +11,12 @@ test("accepts provider roots with or without a trailing v1", () => {
     buildUpstreamUrl("https://yibuapi.com/v1", "v1/chat/completions"),
     "https://yibuapi.com/v1/chat/completions",
   );
+  assert.equal(
+    buildUpstreamUrl("https://yibuapi.com", "v1/responses"),
+    "https://yibuapi.com/v1/responses",
+  );
+  assert.equal(
+    buildUpstreamUrl("https://yibuapi.com/v1", "v1/responses"),
+    "https://yibuapi.com/v1/responses",
+  );
 });

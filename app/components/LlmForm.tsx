@@ -198,7 +198,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               后端 Base URL
             </div>
             <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
-              relay 会根据请求路径选择 OpenAI 或 Anthropic 协议，并从同一个地址拼接对应端点。
+              relay 会根据请求路径选择 OpenAI（Chat Completions / Responses）或 Anthropic 协议，并从同一个地址拼接对应端点。
             </div>
           </div>
 
@@ -246,6 +246,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
                 <div className="value mono" style={{ marginTop: 6 }}>
                   {relayBase}/v1/chat/completions
                   <br />
+                  {relayBase}/v1/responses
+                  <br />
                   {relayBase}/v1/messages
                 </div>
                 <div className="hint" style={{ marginTop: 6 }}>
@@ -268,7 +270,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               disabled={testing || !isEdit}
             >
               {testing ? <span className="spinner" /> : null}
-              {testing ? "正在测试两种协议…" : "🧪 测试兼容性"}
+              {testing ? "正在测试三种协议…" : "🧪 测试兼容性"}
             </button>
             {!baseUrl.trim() && (
               <span className="muted" style={{ fontSize: 12 }}>
@@ -279,14 +281,18 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
 
           {testResult && (
             <div className="protocol-test-row">
-              {(["openai", "anthropic"] as const).map((protocol) => (
+              {([
+                { key: "openai", label: "OpenAI" },
+                { key: "openaiResponses", label: "Responses" },
+                { key: "anthropic", label: "Anthropic" },
+              ] as const).map(({ key, label }) => (
                 <div
-                  key={protocol}
-                  className={`test-result ${testResult[protocol].success ? "ok" : "fail"}`}
+                  key={key}
+                  className={`test-result ${testResult[key].success ? "ok" : "fail"}`}
                 >
                   <div className="title">
-                    {protocol === "openai" ? "OpenAI" : "Anthropic"} · {" "}
-                    {testResult[protocol].success ? "✓ 支持" : "✗ 不支持"}
+                    {label} · {" "}
+                    {testResult[key].success ? "✓ 支持" : "✗ 不支持"}
                   </div>
                 </div>
               ))}

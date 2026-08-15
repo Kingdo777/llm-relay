@@ -6,7 +6,7 @@ import type {
   Protocol,
 } from "./types";
 
-export const LOG_PARSER_VERSION = 6;
+export const LOG_PARSER_VERSION = 7;
 type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {
@@ -98,8 +98,55 @@ function extractCompleteObjectsFromArray(raw: string, key: string): unknown[] {
   return items;
 }
 
-function isSystemContextText(text: string): boolean {
-  return text.trimStart().startsWith("<system-reminder>");
+/**
+ * Claude Code / agent 客户端注入到 user 消息里的包装标签。这些不是用户输入，
+ * 日志压缩时应整体剥离，只保留真实文本。
+ */
+const INJECTED_TAGS = [
+  "system-reminder",
+  "local-command-caveat",
+  "command-name",
+  "command-message",
+  "command-args",
+  "local-command-stdout",
+  "total_tokens",
+];
+
+/**
+ * 剥离注入的 <tag>...</tag> 包装块（可多条、可跨行），保留其余真实文本。
+ *
+ * 旧实现只处理 <system-reminder>，且"整条以标签开头就丢弃"，导致 Claude Code
+ * 这类把注入上下文放在 user 消息开头的客户端，其真实问题被一并清空（日志 input
+ * 变成 {"messages":[]}），或被 local-command 包装淹没。改为只剥离标签块，
+ * 保留块外的真实文本。
+ */
+function stripInjectedBlocks(text: string): string {
+  let out = text;
+  for (const tag of INJECTED_TAGS) {
+    out = out.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g"), "");
+  }
+  return out.trim();
+}
+
+/**
+ * 从消息 content 收集文本块，兼容 OpenAI / Anthropic 三种形态：
+ * 字符串、文本块数组（text 与 tool_result 混排）、单对象（Anthropic 新格式 {type:"text",text}）。
+ */
+function collectUserTexts(content: unknown): string[] {
+  if (typeof content === "string") return [content];
+  if (Array.isArray(content)) {
+    return content.flatMap((block) => {
+      if (typeof block === "string") return [block];
+      if (isObject(block) && block.type === "text" && typeof block.text === "string") {
+        return [block.text];
+      }
+      return [];
+    });
+  }
+  if (isObject(content) && content.type === "text" && typeof content.text === "string") {
+    return [content.text];
+  }
+  return [];
 }
 
 export function compactLogInput(raw: string, maxLength: number): string {
@@ -110,16 +157,12 @@ export function compactLogInput(raw: string, maxLength: number): string {
     for (let index = value.messages.length - 1; index >= 0; index -= 1) {
       const message = value.messages[index];
       if (!isObject(message) || message.role !== "user") continue;
-      const texts = typeof message.content === "string"
-        ? [message.content]
-        : Array.isArray(message.content)
-          ? message.content.flatMap((block) =>
-              isObject(block) && block.type === "text" && typeof block.text === "string"
-                ? [block.text]
-                : []
-            )
-          : [];
-      const text = texts.filter((item) => item && !isSystemContextText(item)).join("\n\n");
+      // 只取最新一条 user 消息；剥离注入的包装块后，
+      // 若无真实文本（如纯 tool_result / 纯注入上下文）则返回空，不回退历史消息。
+      const text = collectUserTexts(message.content)
+        .map(stripInjectedBlocks)
+        .filter(Boolean)
+        .join("\n\n");
       if (!text) return JSON.stringify({ messages: [] });
       const suffix = text.length > maxLength ? `\n…[已截断，原始长度 ${text.length}]` : "";
       const content = text.length > maxLength
@@ -250,6 +293,89 @@ function parseOpenAiStream(raw: string): ParsedLogContent {
   return { entries: [{ role: "assistant", blocks }], warnings };
 }
 
+/**
+ * 解析 OpenAI Responses API 的 SSE 流。
+ *
+ * Responses 的事件类型以 `response.` 前缀出现，与 Chat Completions 的
+ * `chat.completion.chunk` 结构不同。这里累积：
+ *   - response.output_text.delta            → 正文
+ *   - response.reasoning_*_text.delta      → 推理摘要
+ *   - response.output_item.added            → function_call 的名字
+ *   - response.function_call_arguments.delta→ function_call 的参数
+ */
+function parseOpenAiResponsesStream(raw: string): ParsedLogContent {
+  const { events, truncated } = parseSse(raw);
+  const texts = new Map<number, string>();
+  const reasoning = new Map<number, string>();
+  const tools = new Map<string, { name: string; args: string }>();
+  const toolOrder: string[] = [];
+  const warnings: string[] = [];
+  for (const event of events) {
+    if (event.data === "[DONE]") continue;
+    try {
+      const value = JSON.parse(event.data) as JsonObject;
+      const type = typeof value.type === "string" ? value.type : "";
+
+      if (type === "response.output_item.added") {
+        const item = isObject(value.item) ? value.item : {};
+        if (item.type === "function_call") {
+          const id = typeof item.id === "string" ? item.id : `tool_${toolOrder.length}`;
+          if (!tools.has(id)) {
+            toolOrder.push(id);
+            tools.set(id, {
+              name: typeof item.name === "string" ? item.name : "tool",
+              args: typeof item.arguments === "string" ? item.arguments : "",
+            });
+          }
+        }
+      } else if (type === "response.function_call_arguments.delta") {
+        const id = typeof value.item_id === "string" ? value.item_id
+          : (toolOrder[toolOrder.length - 1] ?? "tool");
+        const delta = typeof value.delta === "string" ? value.delta : "";
+        const current = tools.get(id) ?? { name: "tool", args: "" };
+        if (!tools.has(id)) toolOrder.push(id);
+        current.args += delta;
+        tools.set(id, current);
+      } else if (type === "response.output_text.delta") {
+        const idx = typeof value.output_index === "number" ? value.output_index : 0;
+        if (typeof value.delta === "string") {
+          texts.set(idx, (texts.get(idx) ?? "") + value.delta);
+        }
+      } else if (
+        type === "response.reasoning_summary_text.delta" ||
+        type === "response.reasoning_text.delta"
+      ) {
+        const idx = typeof value.output_index === "number" ? value.output_index : 0;
+        if (typeof value.delta === "string") {
+          reasoning.set(idx, (reasoning.get(idx) ?? "") + value.delta);
+        }
+      }
+    } catch { warnings.push("部分 Responses SSE 事件不是完整 JSON，已跳过。"); }
+  }
+  const blocks: ParsedLogBlock[] = [...reasoning]
+    .sort(([a], [b]) => a - b)
+    .filter(([, text]) => text)
+    .map(([, text]) => textBlock(text, "plain"));
+  blocks.push(
+    ...[...texts]
+      .sort(([a], [b]) => a - b)
+      .filter(([, text]) => text)
+      .map(([, text]) => textBlock(text))
+  );
+  blocks.push(
+    ...toolOrder
+      .map((id) => tools.get(id))
+      .filter((tool): tool is { name: string; args: string } => !!tool)
+      .map((tool): ParsedLogBlock => ({
+        type: "tool",
+        name: tool.name,
+        input: parseToolJson(tool.args),
+      }))
+  );
+  if (truncated) warnings.push("流式日志可能已截断，展示的是已成功解析的部分。");
+  return { entries: [{ role: "assistant", blocks }], warnings };
+}
+
 function parseAnthropicStream(raw: string): ParsedLogContent {
   const { events, truncated } = parseSse(raw);
   const blocks = new Map<number, ParsedLogBlock>();
@@ -306,6 +432,29 @@ function parseJsonResponse(value: unknown): ParsedLogContent {
     return { entries, metadata: { model: value.model, usage: value.usage } };
   }
   if (Array.isArray(value.content)) return { entries: [{ role: String(value.role ?? "assistant"), blocks: contentBlocks(value.content) }], metadata: { model: value.model, usage: value.usage, stop_reason: value.stop_reason } };
+  // OpenAI Responses 非流式响应：{ object: "response", output: [ {type:"message"|"function_call"|"reasoning"} ] }
+  if (value.object === "response" && Array.isArray(value.output)) {
+    const blocks: ParsedLogBlock[] = [];
+    for (const item of value.output) {
+      if (!isObject(item)) continue;
+      if (item.type === "reasoning" && Array.isArray(item.summary)) {
+        for (const s of item.summary) {
+          if (isObject(s) && typeof s.text === "string") blocks.push(textBlock(s.text, "plain"));
+        }
+      } else if (item.type === "message" && Array.isArray(item.content)) {
+        for (const part of item.content) {
+          if (isObject(part) && typeof part.text === "string") blocks.push(textBlock(part.text));
+        }
+      } else if (item.type === "function_call") {
+        const args = typeof item.arguments === "string" ? item.arguments : "";
+        blocks.push({ type: "tool", name: String(item.name ?? "tool"), input: parseToolJson(args) });
+      }
+    }
+    return {
+      entries: [{ role: "assistant", blocks }],
+      metadata: { model: value.model, usage: value.usage, status: value.status },
+    };
+  }
   return { entries: [{ role: "response", blocks: [dataBlock("response", value)] }] };
 }
 
@@ -325,6 +474,9 @@ function detectSseProtocol(raw: string, fallback: Protocol): Protocol {
       ) {
         return "anthropic";
       }
+      if (typeof value.type === "string" && value.type.startsWith("response.")) {
+        return "openai-responses";
+      }
     } catch {
       // 继续检查后续事件，无法识别时使用请求协议兜底。
     }
@@ -336,9 +488,10 @@ export function parseLogOutput(raw: string | null, protocol: Protocol): ParsedLo
   if (!raw) return { entries: [] };
   const trimmed = raw.trimStart();
   if (trimmed.startsWith("event:") || trimmed.startsWith("data:")) {
-    return detectSseProtocol(raw, protocol) === "anthropic"
-      ? parseAnthropicStream(raw)
-      : parseOpenAiStream(raw);
+    const proto = detectSseProtocol(raw, protocol);
+    if (proto === "anthropic") return parseAnthropicStream(raw);
+    if (proto === "openai-responses") return parseOpenAiResponsesStream(raw);
+    return parseOpenAiStream(raw);
   }
   try { return parseJsonResponse(parseJson(raw)); }
   catch { return { entries: [{ role: "response", blocks: [textBlock(raw)] }], warnings: ["响应不是完整 JSON 或 SSE，已按原始文本展示。"] }; }

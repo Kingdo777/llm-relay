@@ -1,6 +1,6 @@
 # 🔀 LLM 中转站
 
-一个单体 LLM 请求中转代理，带两个管理页面。支持 OpenAI 与 Anthropic 两种协议的**同格式透传**（含 SSE 流式），中转时自动注入鉴权头并覆盖模型名。
+一个单体 LLM 请求中转代理，带两个管理页面。支持 OpenAI（Chat Completions / Responses）与 Anthropic 三种端点格式的**同格式透传**（含 SSE 流式），中转时自动注入鉴权头并覆盖模型名。
 
 ## 功能
 
@@ -21,7 +21,8 @@
 中转地址**固定**：
 
 ```
-http://<host>:<port>/v1/chat/completions   # OpenAI 协议入口
+http://<host>:<port>/v1/chat/completions   # OpenAI Chat Completions 协议入口
+http://<host>:<port>/v1/responses           # OpenAI Responses 协议入口
 http://<host>:<port>/v1/messages            # Anthropic 协议入口
 ```
 
@@ -31,7 +32,7 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 每个 LLM 只配置一个 **Base URL**。地址末尾带或不带 `/v1` 均可，relay 会避免重复拼接。
 
 中转逻辑：
-1. 请求路径末段决定协议（`chat/completions`→OpenAI，`messages`→Anthropic）
+1. 请求路径末段决定协议（`chat/completions`→OpenAI Chat，`responses`→OpenAI Responses，`messages`→Anthropic）
 2. 请求体里的 `model`（= 别名）决定路由到哪个 LLM
 3. 使用该 LLM 的统一 Base URL 拼接协议端点，注入对应鉴权头，把 model 覆盖为真实模型名后原样转发
 
@@ -73,7 +74,8 @@ app/
     llms/[id]/test/route.ts  # POST 测试连接
     logs/route.ts            # GET 日志列表（分页/筛选）
     logs/[id]/route.ts       # GET 单条详情
-    v1/chat/completions/route.ts  # OpenAI 协议中转入口（固定地址）
+    v1/chat/completions/route.ts  # OpenAI Chat Completions 协议中转入口（固定地址）
+    v1/responses/route.ts          # OpenAI Responses 协议中转入口（固定地址）
     v1/messages/route.ts          # Anthropic 协议中转入口（固定地址）
   components/               # 前端组件
   llms/page.tsx             # 页面一

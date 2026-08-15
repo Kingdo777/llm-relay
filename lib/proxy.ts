@@ -31,7 +31,7 @@ function clamp(s: string, max: number): string {
  * 选后端协议与 baseURL。
  * 规则：
  *   - 请求路径决定协议
- *   - 两种协议共用同一个后端 baseURL
+ *   - 三种协议共用同一个后端 baseURL
  *   - 不执行协议转换
  */
 export function pickBackend(
@@ -169,6 +169,7 @@ export async function relayRequest(
           output: clamp(accumulated, MAX_OUTPUT_LEN),
           duration_ms,
           status_code: status,
+          is_stream: isSSE ? 1 : 0,
         });
       } else {
         updateLog(logId, {
@@ -177,6 +178,7 @@ export async function relayRequest(
           output: clamp(accumulated, MAX_OUTPUT_LEN),
           duration_ms,
           status_code: status,
+          is_stream: isSSE ? 1 : 0,
         });
       }
     };
@@ -225,6 +227,7 @@ export async function relayRequest(
       error: `读取上游响应失败：${err.message}`,
       duration_ms: Date.now() - start,
       status_code: status,
+      is_stream: isSSE ? 1 : 0,
     });
     return {
       response: new Response(
@@ -243,6 +246,7 @@ export async function relayRequest(
     output: clamp(bufText, MAX_OUTPUT_LEN),
     duration_ms,
     status_code: status,
+    is_stream: isSSE ? 1 : 0,
   });
 
   return {
@@ -262,7 +266,7 @@ export function parseProtocolFromRequest(
   if (!protocol) {
     return {
       error:
-        "无法识别请求路径。OpenAI 请访问 /v1/chat/completions，Anthropic 请访问 /v1/messages。",
+        "无法识别请求路径。OpenAI 请访问 /v1/chat/completions 或 /v1/responses，Anthropic 请访问 /v1/messages。",
     };
   }
   return { protocol };

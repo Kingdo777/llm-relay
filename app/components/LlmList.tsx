@@ -77,7 +77,8 @@ export function LlmList() {
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "测试失败");
       const result = data.data as ProtocolSupportResult;
-      show(`「${l.name}」兼容性：OpenAI ${result.openai.success ? "支持" : "不支持"}，Anthropic ${result.anthropic.success ? "支持" : "不支持"}`, "success");
+      const fmt = (r: { success: boolean }) => (r.success ? "支持" : "不支持");
+      show(`「${l.name}」兼容性：OpenAI ${fmt(result.openai)}，Responses ${fmt(result.openaiResponses)}，Anthropic ${fmt(result.anthropic)}`, "success");
       await load();
     } catch (e) {
       show(`测试失败：${(e as Error).message}`, "error");
@@ -199,6 +200,23 @@ export function LlmList() {
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
+                Responses:
+              </span>
+              <span className="url-cell" style={{ flex: 1 }}>
+                <span
+                  className="url-text"
+                  title={`${relayBase}/v1/responses`}
+                >
+                  {relayBase}/v1/responses
+                </span>
+                <CopyButton
+                  value={`${relayBase}/v1/responses`}
+                  iconOnly
+                />
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
                 Anthropic:
               </span>
               <span className="url-cell" style={{ flex: 1 }}>
@@ -277,6 +295,9 @@ export function LlmList() {
                       <div className="protocol-supports">
                         <span className={`protocol-badge ${l.openai_supported === null ? "unknown" : l.openai_supported ? "supported" : "unsupported"}`}>
                           OpenAI · {supportLabel(l.openai_supported)}
+                        </span>
+                        <span className={`protocol-badge ${l.openai_responses_supported === null ? "unknown" : l.openai_responses_supported ? "supported" : "unsupported"}`}>
+                          Responses · {supportLabel(l.openai_responses_supported)}
                         </span>
                         <span className={`protocol-badge ${l.anthropic_supported === null ? "unknown" : l.anthropic_supported ? "supported" : "unsupported"}`}>
                           Anthropic · {supportLabel(l.anthropic_supported)}

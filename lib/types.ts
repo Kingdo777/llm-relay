@@ -1,7 +1,15 @@
 // 全局类型定义
 
-/** LLM 协议类型 */
-export type Protocol = "openai" | "anthropic";
+/**
+ * LLM 协议类型。
+ *
+ * - openai：OpenAI Chat Completions（/v1/chat/completions），Bearer 鉴权
+ * - openai-responses：OpenAI Responses（/v1/responses），Bearer 鉴权
+ * - anthropic：Anthropic Messages（/v1/messages），x-api-key 鉴权
+ *
+ * 三者均为同格式透传，不做协议转换。
+ */
+export type Protocol = "openai" | "anthropic" | "openai-responses";
 
 export type ParsedLogBlock =
   | { type: "text"; text: string; format: "markdown" | "plain" }
@@ -26,7 +34,8 @@ export interface ParsedLogContent {
  * - base_url：统一的后端根地址；relay 根据请求路径拼接对应协议端点
  *
  * 中转入口固定为 http://host/，请求路径末段决定协议：
- *   .../v1/chat/completions → OpenAI
+ *   .../v1/chat/completions → OpenAI（Chat Completions）
+ *   .../v1/responses        → OpenAI（Responses）
  *   .../v1/messages          → Anthropic
  */
 export interface LlmRow {
@@ -38,6 +47,7 @@ export interface LlmRow {
   base_url: string;
   openai_supported: 0 | 1 | null;
   anthropic_supported: 0 | 1 | null;
+  openai_responses_supported: 0 | 1 | null;
   protocols_tested_at: string | null;
   token: string;
   model_name: string;
@@ -74,6 +84,7 @@ export interface LogRow {
   error: string | null;
   duration_ms: number;
   status_code: number | null;
+  is_stream: 0 | 1 | null;
   created_at: string;
   parsed_input: string | null;
   parsed_output: string | null;
@@ -92,6 +103,7 @@ export interface TestResult {
 
 export interface ProtocolSupportResult {
   openai: TestResult;
+  openaiResponses: TestResult;
   anthropic: TestResult;
   tested_at: string;
 }

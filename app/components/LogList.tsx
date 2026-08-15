@@ -246,6 +246,7 @@ export function LogList() {
                 <th>模型</th>
                 <th>端点</th>
                 <th>状态</th>
+                <th>流式</th>
                 <th>HTTP</th>
                 <th>耗时</th>
                 <th></th>
@@ -266,6 +267,15 @@ export function LogList() {
                   <td className="mono">{r.model_name || "—"}</td>
                   <td className="mono">{r.endpoint || "—"}</td>
                   <td>{statusBadge(r.status)}</td>
+                  <td style={{ textAlign: "center" }}>
+                    {r.is_stream === 1 ? (
+                      <span className="badge badge-warn">流</span>
+                    ) : r.is_stream === 0 ? (
+                      <span className="badge badge-muted">非流</span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
                   <td className="mono">
                     {r.status_code != null ? r.status_code : "—"}
                   </td>
@@ -374,6 +384,7 @@ export function LogList() {
                       {statusBadge(detail.status)} ·{" "}
                       别名 <span className="mono">{detail.llm_alias}</span> ·{" "}
                       {detail.protocol} ·{" "}
+                      {detail.is_stream === 1 ? "流式" : detail.is_stream === 0 ? "非流式" : "流式未知"} ·{" "}
                       HTTP {detail.status_code ?? "—"} ·{" "}
                       {fmtDuration(detail.duration_ms)} ·{" "}
                       {fmtTime(detail.created_at)}

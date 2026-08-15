@@ -19,25 +19,7 @@ export async function testLlm(
   );
   // 除连通性与鉴权外，同时验证 Agent 所需的工具 Schema。只发 hi
   // 会让部分 OpenAI 上游的伪 Anthropic 入口被误判为兼容。
-  const body: Record<string, unknown> = {
-    model: llm.model_name,
-    max_tokens: 32,
-    messages: [{ role: "user", content: "Reply OK. Do not call the probe tool." }],
-  };
-  body.tools = protocol === "anthropic"
-    ? [{
-        name: "relay_protocol_probe",
-        description: "Validate Anthropic tool schema compatibility.",
-        input_schema: { type: "object", properties: {}, additionalProperties: false },
-      }]
-    : [{
-        type: "function",
-        function: {
-          name: "relay_protocol_probe",
-          description: "Validate OpenAI tool schema compatibility.",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-        },
-      }];
+  const body = buildProbeBody(llm, protocol);
 
   try {
     const resp = await fetch(upstreamUrl, {
@@ -92,6 +74,51 @@ export async function testLlm(
   }
 }
 
+/** 构造各协议的探测请求体。除连通性与鉴权外，同时带上工具以验证上游对工具 Schema 的兼容。 */
+function buildProbeBody(llm: LlmRow, protocol: Protocol): Record<string, unknown> {
+  const prompt = "Reply OK. Do not call the probe tool.";
+  if (protocol === "anthropic") {
+    return {
+      model: llm.model_name,
+      max_tokens: 32,
+      messages: [{ role: "user", content: prompt }],
+      tools: [{
+        name: "relay_protocol_probe",
+        description: "Validate Anthropic tool schema compatibility.",
+        input_schema: { type: "object", properties: {}, additionalProperties: false },
+      }],
+    };
+  }
+  if (protocol === "openai-responses") {
+    // Responses 用 input（而非 messages），工具为扁平结构（name/parameters 顶层）。
+    return {
+      model: llm.model_name,
+      max_output_tokens: 32,
+      input: [{ role: "user", content: prompt }],
+      tools: [{
+        type: "function",
+        name: "relay_protocol_probe",
+        description: "Validate OpenAI Responses tool schema compatibility.",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      }],
+    };
+  }
+  // openai chat completions
+  return {
+    model: llm.model_name,
+    max_tokens: 32,
+    messages: [{ role: "user", content: prompt }],
+    tools: [{
+      type: "function",
+      function: {
+        name: "relay_protocol_probe",
+        description: "Validate OpenAI tool schema compatibility.",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    }],
+  };
+}
+
 /** 从响应里抽取一段预览文本用于展示 */
 function tryExtractPreview(text: string): string {
   try {
@@ -101,6 +128,15 @@ function tryExtractPreview(text: string): string {
     }
     if (parsed.content?.[0]?.text) {
       return String(parsed.content[0].text).slice(0, 200);
+    }
+    // OpenAI Responses 非流式响应：output[].content[].text
+    if (Array.isArray(parsed.output)) {
+      const out = parsed.output
+        .flatMap((item: { content?: Array<{ text?: string }> }) =>
+          Array.isArray(item?.content) ? item.content.map((c) => c?.text).filter(Boolean) : []
+        )
+        .join("");
+      if (out) return String(out).slice(0, 200);
     }
     if (parsed.error) {
       return JSON.stringify(parsed.error).slice(0, 300);
