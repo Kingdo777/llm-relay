@@ -8,6 +8,8 @@ import type {
 } from "@/lib/types";
 import { useToast } from "./Toast";
 
+type ProtocolKey = "openai" | "openaiResponses" | "anthropic";
+
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
 function useOrigin(): string {
   const [origin, setOrigin] = useState("");
@@ -41,6 +43,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProtocolSupportResult | null>(null);
+  const [expandedReasons, setExpandedReasons] = useState<Set<ProtocolKey>>(new Set());
 
   useEffect(() => {
     if (llm) {
@@ -132,6 +135,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     }
     setTesting(true);
     setTestResult(null);
+    setExpandedReasons(new Set());
     try {
       const resp = await fetch(
         `/api/llms/${llm!.id}/test`,
@@ -150,6 +154,15 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     } finally {
       setTesting(false);
     }
+  }
+
+  function toggleReason(key: ProtocolKey) {
+    setExpandedReasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   const relayBase = useOrigin();
@@ -371,11 +384,24 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
                 <div
                   key={key}
                   className={`test-result ${testResult[key].success ? "ok" : "fail"}`}
+                  role={!testResult[key].success ? "button" : undefined}
+                  onClick={() => {
+                    if (!testResult[key].success) toggleReason(key);
+                  }}
+                  style={{ cursor: testResult[key].success ? "default" : "pointer" }}
+                  title={
+                    testResult[key].success
+                      ? `${label} 支持`
+                      : `${testResult[key].success ? "收起" : "点击查看失败原因"}${expandedReasons.has(key) ? "（再次点击收回）" : ""}`
+                  }
                 >
                   <div className="title">
                     {label} · {" "}
                     {testResult[key].success ? "✓ 支持" : "✗ 不支持"}
                   </div>
+                  {!testResult[key].success && expandedReasons.has(key) && (
+                    <pre>{testResult[key].detail || testResult[key].message}</pre>
+                  )}
                 </div>
               ))}
             </div>
