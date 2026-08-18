@@ -126,7 +126,9 @@ export function LlmList() {
       label: support === null ? "未测试" : support ? "支持" : "不支持",
       cls: support === null ? "unknown" : support ? "supported" : "unsupported",
       success: support,
-      detail: null,
+      detail: support === false
+        ? "当前兼容性结果为“不支持”，请先点击“测试兼容性”获取最新失败原因。"
+        : null,
     };
   }
 
