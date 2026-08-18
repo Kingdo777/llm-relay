@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 后台启动 llm-relay（Next.js 生产模式）
-# 监听 0.0.0.0:3000，日志输出到 data/logs/app.log
+# 监听 0.0.0.0:3001，日志输出到 data/logs/app.log
 set -euo pipefail
 
 # 切到脚本所在目录，保证任意位置调用都一致
@@ -38,7 +38,7 @@ echo "监听: http://$HOST:$PORT  (PID 写入 $PID_FILE)"
 
 # setsid 让进程在独立进程组里运行，stop 时可对整个进程组发信号，
 # 避免 kill 父进程(npm)后留下子进程(next-server)变孤儿继续占端口
-setsid npm run start -- -H "$HOST" -p "$PORT" >>"$LOG_FILE" 2>&1 &
+NODE_TLS_REJECT_UNAUTHORIZED=0 setsid npm run start -- -H "$HOST" -p "$PORT" >>"$LOG_FILE" 2>&1 &
 APP_PID=$!
 # 进程组 ID = 组长的 PID，即 $APP_PID
 echo "$APP_PID" >"$PID_FILE"
