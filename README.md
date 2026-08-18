@@ -51,7 +51,7 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 示例（配了别名 `gpt4` 的 LLM）：
 
 ```
-curl http://localhost:3000/v1/chat/completions \
+curl http://localhost:3001/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"gpt4","messages":[{"role":"user","content":"你好"}]}'
 # 中转站把 model 覆盖为该 LLM 配置的真实模型名，转发到 OpenAI Base URL
@@ -69,7 +69,7 @@ curl http://localhost:3000/v1/chat/completions \
 
 ```bash
 npm install        # 安装依赖
-npm run dev        # 开发模式，默认 http://localhost:3000
+npm run dev        # 开发模式，默认 http://localhost:3001
 npm run build      # 生产构建
 npm run start      # 生产启动
 ```
