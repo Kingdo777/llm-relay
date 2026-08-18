@@ -23,9 +23,13 @@ fi
 # PID 文件残留但进程已死，清理掉
 rm -f "$PID_FILE"
 
-# 生产模式需要先 build；.next 不存在或缺生产产物时自动构建
-if [[ ! -d "$ROOT/.next" ]]; then
-  echo ".next 不存在，先执行构建..."
+# 支持两种模式：
+# - 默认每次启动前都会执行一次 build（避免“有时看不到更新”）
+# - 如需临时跳过构建，可设置 LLM_RELAY_SKIP_BUILD=1（用于只做快速重启）
+if [[ "${LLM_RELAY_SKIP_BUILD:-0}" == "1" ]]; then
+  echo "检测到 LLM_RELAY_SKIP_BUILD=1，跳过构建，直接启动..."
+else
+  echo "执行构建..."
   npm run build >>"$LOG_FILE" 2>&1
 fi
 
