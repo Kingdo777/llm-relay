@@ -15,10 +15,10 @@ PID_FILE="$ROOT/.run.pid"
 
 mkdir -p "$LOG_DIR"
 
-# 已有实例运行则拒绝重复启动
+# 已有实例运行则先执行 stop.sh 再启动
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "已有进程在运行（PID $(cat "$PID_FILE")）。如需重启请先 ./stop.sh 或 kill 该进程。"
-  exit 1
+  echo "检测到已有实例在运行，先执行 stop.sh 进行重启..."
+  ./stop.sh
 fi
 # PID 文件残留但进程已死，清理掉
 rm -f "$PID_FILE"
