@@ -361,46 +361,63 @@ export function LlmList() {
                       </div>
                     </td>
                     <td>
-                      <div className="protocol-supports">
-                        {(
-                          [
-                            { label: "OpenAI", key: "openai" as ProtocolKey },
-                            {
-                              label: "Responses",
-                              key: "openaiResponses" as ProtocolKey,
-                            },
-                            { label: "Anthropic", key: "anthropic" as ProtocolKey },
-                          ] as const
-                        ).map((protocol) => {
+                      {(() => {
+                        const protocols = ([
+                          { label: "OpenAI", key: "openai" as ProtocolKey },
+                          { label: "Responses", key: "openaiResponses" as ProtocolKey },
+                          { label: "Anthropic", key: "anthropic" as ProtocolKey },
+                        ] as const).map((protocol) => {
                           const state = getProtocolState(l, protocol.key);
-                          const expanded = expandedFailure[l.id]?.has(protocol.key) ?? false;
-                          const hasFailure = state.success === false && !!state.detail;
-                          return (
-                            <div key={`${l.id}-${protocol.key}`} style={{ width: "100%" }}>
-                              <span
-                                className={`protocol-badge ${state.cls} ${hasFailure ? "clickable-badge" : ""}`}
-                                onClick={() => {
-                                  if (hasFailure) toggleFailureReason(l.id, protocol.key);
-                                }}
-                                role={hasFailure ? "button" : undefined}
-                                title={
-                                  hasFailure
-                                    ? expanded
-                                      ? "点击收起失败原因"
-                                      : "点击展开失败原因"
-                                    : `${protocol.label} ${state.label}`
-                                }
-                                style={{ cursor: hasFailure ? "pointer" : "default" }}
-                              >
-                                {protocol.label} · {state.label}
-                              </span>
-                              {hasFailure && expanded ? (
-                                <pre className="protocol-failure-detail">{state.detail}</pre>
-                              ) : null}
+                          return {
+                            ...protocol,
+                            labelText: `${protocol.label} · ${state.label}`,
+                            cls: state.cls,
+                            detail: state.detail,
+                            success: state.success,
+                            isOpen: expandedFailure[l.id]?.has(protocol.key) ?? false,
+                            hasFailure: state.success === false && !!state.detail,
+                          };
+                        });
+                        const activeFailures = protocols.filter((item) => item.hasFailure && item.isOpen);
+                        return (
+                          <>
+                            <div className="protocol-supports">
+                              {protocols.map((item) => (
+                                <span
+                                  key={`${l.id}-${item.key}`}
+                                  className={`protocol-badge ${item.cls} ${item.hasFailure ? "clickable-badge" : ""}`}
+                                  onClick={() => {
+                                    if (item.hasFailure) toggleFailureReason(l.id, item.key);
+                                  }}
+                                  role={item.hasFailure ? "button" : undefined}
+                                  title={
+                                    item.hasFailure
+                                      ? item.isOpen
+                                        ? "点击收起失败原因"
+                                        : "点击展开失败原因"
+                                      : item.labelText
+                                  }
+                                  style={{ cursor: item.hasFailure ? "pointer" : "default" }}
+                                >
+                                  {item.labelText}
+                                </span>
+                              ))}
                             </div>
-                          );
-                        })}
-                      </div>
+                            {activeFailures.length > 0 && (
+                              <div className="protocol-failure-stack">
+                                {activeFailures.map((item) => (
+                                  <pre
+                                    key={`${l.id}-${item.key}-detail`}
+                                    className="protocol-failure-detail"
+                                  >
+                                    {`${item.labelText}\n${item.detail}`}
+                                  </pre>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td>
                       <label className="toggle">

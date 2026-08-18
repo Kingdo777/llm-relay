@@ -380,30 +380,33 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
                 { key: "openai", label: "OpenAI" },
                 { key: "openaiResponses", label: "Responses" },
                 { key: "anthropic", label: "Anthropic" },
-              ] as const).map(({ key, label }) => (
-                <div
-                  key={key}
-                  className={`test-result ${testResult[key].success ? "ok" : "fail"}`}
-                  role={!testResult[key].success ? "button" : undefined}
-                  onClick={() => {
-                    if (!testResult[key].success) toggleReason(key);
-                  }}
-                  style={{ cursor: testResult[key].success ? "default" : "pointer" }}
-                  title={
-                    testResult[key].success
-                      ? `${label} 支持`
-                      : `${testResult[key].success ? "收起" : "点击查看失败原因"}${expandedReasons.has(key) ? "（再次点击收回）" : ""}`
-                  }
-                >
-                  <div className="title">
-                    {label} · {" "}
-                    {testResult[key].success ? "✓ 支持" : "✗ 不支持"}
+              ] as const).map(({ key, label }) => {
+                const item = testResult[key];
+                const isOpen = expandedReasons.has(key);
+                const labelText = `${label} · ${item.success ? "✓ 支持" : "✗ 不支持"}`;
+                return (
+                  <div key={key} className="protocol-test-item">
+                    <span
+                      className={`test-result ${item.success ? "ok" : "fail"} protocol-inline-trigger`}
+                      role={!item.success ? "button" : undefined}
+                      onClick={() => {
+                        if (!item.success) toggleReason(key);
+                      }}
+                      style={{ cursor: item.success ? "default" : "pointer" }}
+                      title={
+                        item.success
+                          ? `${label} 支持`
+                          : `${isOpen ? "点击收起失败原因" : "点击查看失败原因"}`
+                      }
+                    >
+                      <div className="title">{labelText}</div>
+                    </span>
+                    {!item.success && isOpen && (
+                      <pre className="protocol-failure-detail">{item.detail || item.message}</pre>
+                    )}
                   </div>
-                  {!testResult[key].success && expandedReasons.has(key) && (
-                    <pre>{testResult[key].detail || testResult[key].message}</pre>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

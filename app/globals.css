@@ -683,17 +683,28 @@ td.mono,
   flex-wrap: wrap;
   gap: 6px;
 }
+.protocol-failure-stack {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 
 .protocol-test-row {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   gap: 8px;
-  overflow-x: auto;
+}
+
+.protocol-test-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .protocol-test-row .test-result {
   flex: 1 0 auto;
-  margin-top: 10px;
+  margin-top: 0;
   white-space: nowrap;
 }
 
