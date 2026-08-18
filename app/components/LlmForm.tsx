@@ -1,6 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { LlmInput, LlmRow, ProtocolSupportResult } from "@/lib/types";
+import type {
+  BaseUrlMode,
+  LlmInput,
+  LlmRow,
+  ProtocolSupportResult,
+} from "@/lib/types";
 import { useToast } from "./Toast";
 
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
@@ -25,7 +30,10 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
 
   const [name, setName] = useState("");
   const [alias, setAlias] = useState("");
+  const [urlMode, setUrlMode] = useState<BaseUrlMode>("unified");
   const [baseUrl, setBaseUrl] = useState("");
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
+  const [anthropicBaseUrl, setAnthropicBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [modelName, setModelName] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -38,14 +46,20 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     if (llm) {
       setName(llm.name);
       setAlias(llm.alias);
+      setUrlMode(llm.url_mode);
       setBaseUrl(llm.base_url);
+      setOpenaiBaseUrl(llm.openai_base_url);
+      setAnthropicBaseUrl(llm.anthropic_base_url);
       setToken(llm.token);
       setModelName(llm.model_name);
       setEnabled(!!llm.enabled);
     } else {
       setName("");
       setAlias("");
+      setUrlMode("unified");
       setBaseUrl("");
+      setOpenaiBaseUrl("");
+      setAnthropicBaseUrl("");
       setToken("");
       setModelName("");
       setEnabled(true);
@@ -63,8 +77,17 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       return;
     }
     const normalizedBaseURL = baseUrl.trim();
-    if (!normalizedBaseURL) {
-      show("Base URL 为必填", "error");
+    const normalizedOpenAIURL = openaiBaseUrl.trim();
+    const normalizedAnthropicURL = anthropicBaseUrl.trim();
+    if (urlMode === "unified" && !normalizedBaseURL) {
+      show("合一模式下 Base URL 为必填", "error");
+      return;
+    }
+    if (
+      urlMode === "separate" &&
+      (!normalizedOpenAIURL || !normalizedAnthropicURL)
+    ) {
+      show("分离模式下两个 Base URL 均为必填", "error");
       return;
     }
 
@@ -73,7 +96,10 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       alias,
       token,
       model_name: modelName,
+      url_mode: urlMode,
       base_url: normalizedBaseURL,
+      openai_base_url: normalizedOpenAIURL,
+      anthropic_base_url: normalizedAnthropicURL,
       enabled,
     };
     setSaving(true);
@@ -198,22 +224,76 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               后端 Base URL
             </div>
             <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
-              relay 会根据请求路径选择 OpenAI（Chat Completions / Responses）或 Anthropic 协议，并从同一个地址拼接对应端点。
+              供应商为两套协议提供同一入口时选“合一”；协议入口不同（如 DeepSeek）时选“分离”。
             </div>
           </div>
 
           <div className="field">
-            <label>Base URL *</label>
-            <input
-              className="input"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="如 https://yibuapi.com 或 https://yibuapi.com/v1"
-            />
-            <div className="hint">
-              自动兼容末尾带或不带 /v1；实际支持哪些协议由测试结果决定。
+            <label>URL 配置模式</label>
+            <div className="segmented url-mode-selector" aria-label="Base URL 配置模式">
+              <button
+                type="button"
+                className={urlMode === "unified" ? "active" : ""}
+                onClick={() => {
+                  setUrlMode("unified");
+                  if (!baseUrl) setBaseUrl(openaiBaseUrl || anthropicBaseUrl);
+                }}
+              >
+                合一
+              </button>
+              <button
+                type="button"
+                className={urlMode === "separate" ? "active" : ""}
+                onClick={() => {
+                  setUrlMode("separate");
+                  if (!openaiBaseUrl) setOpenaiBaseUrl(baseUrl);
+                  if (!anthropicBaseUrl) setAnthropicBaseUrl(baseUrl);
+                }}
+              >
+                分离
+              </button>
             </div>
           </div>
+
+          {urlMode === "unified" ? (
+            <div className="field">
+              <label>统一 Base URL *</label>
+              <input
+                className="input"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="如 https://api.example.com 或 https://api.example.com/v1"
+              />
+              <div className="hint">
+                OpenAI Chat、Responses 与 Anthropic 都从该地址拼接各自端点。
+              </div>
+            </div>
+          ) : (
+            <div className="split-url-fields">
+              <div className="field">
+                <label>OpenAI Base URL *</label>
+                <input
+                  className="input"
+                  value={openaiBaseUrl}
+                  onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                  placeholder="如 https://api.deepseek.com"
+                />
+                <div className="hint">
+                  用于 /v1/chat/completions 与 /v1/responses。
+                </div>
+              </div>
+              <div className="field">
+                <label>Anthropic Base URL *</label>
+                <input
+                  className="input"
+                  value={anthropicBaseUrl}
+                  onChange={(e) => setAnthropicBaseUrl(e.target.value)}
+                  placeholder="如 https://api.deepseek.com/anthropic"
+                />
+                <div className="hint">用于 /v1/messages。</div>
+              </div>
+            </div>
+          )}
 
           <div className="field">
             <label>启用</label>
@@ -272,9 +352,11 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               {testing ? <span className="spinner" /> : null}
               {testing ? "正在测试三种协议…" : "🧪 测试兼容性"}
             </button>
-            {!baseUrl.trim() && (
+            {((urlMode === "unified" && !baseUrl.trim()) ||
+              (urlMode === "separate" &&
+                (!openaiBaseUrl.trim() || !anthropicBaseUrl.trim()))) && (
               <span className="muted" style={{ fontSize: 12 }}>
-                填入 baseURL 后可测试
+                请先补全当前模式下的 Base URL
               </span>
             )}
           </div>

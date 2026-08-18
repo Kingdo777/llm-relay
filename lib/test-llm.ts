@@ -1,5 +1,10 @@
 import type { LlmRow, Protocol, TestResult } from "./types";
-import { buildUpstreamUrl, buildUpstreamHeaders, UPSTREAM_PATH } from "./format";
+import {
+  baseUrlForProtocol,
+  buildUpstreamUrl,
+  buildUpstreamHeaders,
+  UPSTREAM_PATH,
+} from "./format";
 
 /**
  * 测试某个 LLM 配置是否可用：按指定协议发一个最简单的 hi。
@@ -11,7 +16,11 @@ export async function testLlm(
   protocol: Protocol
 ): Promise<TestResult> {
 	const start = Date.now();
-	const upstreamUrl = buildUpstreamUrl(llm.base_url, UPSTREAM_PATH[protocol]);
+  const baseUrl = baseUrlForProtocol(llm, protocol);
+  if (!baseUrl) {
+    return { success: false, message: "该协议未配置 Base URL" };
+  }
+	const upstreamUrl = buildUpstreamUrl(baseUrl, UPSTREAM_PATH[protocol]);
   const headers = buildUpstreamHeaders(
     protocol,
     llm.token,

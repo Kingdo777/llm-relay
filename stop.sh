@@ -17,12 +17,12 @@ if kill -0 "$PID" 2>/dev/null; then
   PGID=$(ps -o pgid= "$PID" | tr -d ' ')
   kill -- -"$PGID"
   echo "已发送停止信号给进程组 $PGID"
-  # 等待组长退出(子进程退出更快,但以组长为准)
+  # 必须等待整个进程组；npm 组长可能先退出，而 next-server 仍在处理旧流式连接。
   for _ in $(seq 1 20); do
-    kill -0 "$PID" 2>/dev/null || break
+    pgrep -g "$PGID" >/dev/null 2>&1 || break
     sleep 0.25
   done
-  if kill -0 "$PID" 2>/dev/null; then
+  if pgrep -g "$PGID" >/dev/null 2>&1; then
     echo "未在 5s 内退出，发送 SIGKILL 给进程组"
     kill -9 -- -"$PGID"
   fi

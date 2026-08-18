@@ -10,6 +10,7 @@
  * 三者均为同格式透传，不做协议转换。
  */
 export type Protocol = "openai" | "anthropic" | "openai-responses";
+export type BaseUrlMode = "unified" | "separate";
 
 export type ParsedLogBlock =
   | { type: "text"; text: string; format: "markdown" | "plain" }
@@ -31,7 +32,8 @@ export interface ParsedLogContent {
  * LLM 配置（数据库行结构）。
  *
  * - alias：别名，作为对外的"模型名"，客户端把 model 填成这个值来选中该 LLM
- * - base_url：统一的后端根地址；relay 根据请求路径拼接对应协议端点
+ * - url_mode：unified 表示三个协议共用地址；separate 表示 OpenAI 与 Anthropic 分开
+ * - OpenAI Chat Completions / Responses 共用 openai_base_url
  *
  * 中转入口固定为 http://host/，请求路径末段决定协议：
  *   .../v1/chat/completions → OpenAI（Chat Completions）
@@ -44,7 +46,11 @@ export interface LlmRow {
   name: string;
   /** 别名 = 对外的 model 名，全局唯一；客户端把 model 填成它来选中本 LLM */
   alias: string;
+  url_mode: BaseUrlMode;
+  /** 兼容旧调用；合一模式下等于统一 URL，分离模式下等于 OpenAI URL */
   base_url: string;
+  openai_base_url: string;
+  anthropic_base_url: string;
   openai_supported: 0 | 1 | null;
   anthropic_supported: 0 | 1 | null;
   openai_responses_supported: 0 | 1 | null;
@@ -60,7 +66,11 @@ export interface LlmRow {
 export interface LlmInput {
   name: string;
   alias: string;
-  base_url: string;
+  url_mode: BaseUrlMode;
+  /** 合一模式使用；保留该字段也便于旧客户端继续调用 API */
+  base_url?: string;
+  openai_base_url?: string;
+  anthropic_base_url?: string;
   token: string;
   model_name: string;
   enabled?: boolean;
@@ -85,6 +95,12 @@ export interface LogRow {
   duration_ms: number;
   status_code: number | null;
   is_stream: 0 | 1 | null;
+  /** 上游返回的 token 用量；老日志或上游未返回 usage 时为 null */
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  /** 从收到 relay 请求到收到上游首个响应字节的时间 */
+  first_byte_ms: number | null;
   created_at: string;
   parsed_input: string | null;
   parsed_output: string | null;
@@ -106,6 +122,68 @@ export interface ProtocolSupportResult {
   openaiResponses: TestResult;
   anthropic: TestResult;
   tested_at: string;
+}
+
+export interface ModelStats24h {
+  llm_id: number;
+  name: string;
+  alias: string;
+  model_name: string;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  success_rate: number;
+  current_rpm: number;
+  current_tpm: number;
+  average_rpm: number;
+  average_tpm: number;
+  peak_rpm: number;
+  peak_tpm: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  token_coverage: number;
+  average_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  average_first_byte_ms: number | null;
+  output_tokens_per_second: number | null;
+}
+
+export interface StatsSeriesPoint {
+  bucket: string;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
+
+export interface ModelStatsSeries {
+  llm_id: number;
+  points: StatsSeriesPoint[];
+}
+
+export interface DailyTokenPoint {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface ModelDailyTokens {
+  llm_id: number;
+  points: DailyTokenPoint[];
+}
+
+export interface DashboardStats {
+  window_started_at: string;
+  generated_at: string;
+  series_bucket_minutes: number;
+  summary: Omit<ModelStats24h, "llm_id" | "name" | "alias" | "model_name">;
+  models: ModelStats24h[];
+  series: StatsSeriesPoint[];
+  model_series: ModelStatsSeries[];
+  daily_tokens: DailyTokenPoint[];
+  model_daily_tokens: ModelDailyTokens[];
 }
 
 /** 统一 API 响应包装（用于 CRUD 等接口，中转接口除外） */

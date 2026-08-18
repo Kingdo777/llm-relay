@@ -58,7 +58,10 @@ export function LlmList() {
           alias: l.alias,
           token: l.token,
           model_name: l.model_name,
+          url_mode: l.url_mode,
           base_url: l.base_url,
+          openai_base_url: l.openai_base_url,
+          anthropic_base_url: l.anthropic_base_url,
           enabled,
         }),
       });
@@ -115,7 +118,10 @@ export function LlmList() {
         alias,
         token: l.token,
         model_name: l.model_name,
+        url_mode: l.url_mode,
         base_url: l.base_url,
+        openai_base_url: l.openai_base_url,
+        anthropic_base_url: l.anthropic_base_url,
         enabled: !!l.enabled,
       };
       try {
@@ -157,7 +163,7 @@ export function LlmList() {
         <div>
           <h1>LLM 管理</h1>
           <div className="sub">
-            每条 LLM 使用一个 Base URL，relay 自动识别请求协议并直连对应端点
+            Base URL 可合一或按 OpenAI / Anthropic 分离，relay 按请求协议直连对应入口
           </div>
         </div>
         <button className="btn btn-primary" onClick={openCreate}>
@@ -263,7 +269,7 @@ export function LlmList() {
                 <th>名称</th>
                 <th>别名（model）</th>
                 <th>真实模型名</th>
-                <th>Base URL</th>
+                <th>Base URL 配置</th>
                 <th>协议兼容性</th>
                 <th>启用</th>
                 <th>操作</th>
@@ -286,10 +292,27 @@ export function LlmList() {
                     </td>
                     <td className="mono">{l.model_name}</td>
                     <td className="mono" style={{ maxWidth: 260 }}>
-                      <span className="url-cell">
-                        <span className="url-text" title={l.base_url}>{l.base_url}</span>
-                        <CopyButton value={l.base_url} iconOnly />
-                      </span>
+                      <div className="llm-url-stack">
+                        {l.url_mode === "unified" ? (
+                          <span className="url-cell">
+                            <span className="url-text" title={l.base_url}>{l.base_url}</span>
+                            <CopyButton value={l.base_url} iconOnly />
+                          </span>
+                        ) : (
+                          <>
+                            <span className="url-cell">
+                              <span className="url-kind">OAI</span>
+                              <span className="url-text" title={l.openai_base_url}>{l.openai_base_url}</span>
+                              <CopyButton value={l.openai_base_url} iconOnly />
+                            </span>
+                            <span className="url-cell">
+                              <span className="url-kind">ANT</span>
+                              <span className="url-text" title={l.anthropic_base_url}>{l.anthropic_base_url}</span>
+                              <CopyButton value={l.anthropic_base_url} iconOnly />
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <div className="protocol-supports">

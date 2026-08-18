@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { listLlms, createLlm } from "@/lib/db";
 import type { LlmInput } from "@/lib/types";
+import { normalizeLlmInput } from "@/lib/llm-input";
 
 /** GET /api/llms —— 列表 */
 export async function GET() {
   return NextResponse.json({ ok: true, data: listLlms() });
-}
-
-/** 别名合法性：仅字母数字下划线连字符 */
-function validAlias(a: string): boolean {
-  return /^[A-Za-z0-9_.-]+$/.test(a);
 }
 
 /** POST /api/llms —— 新增 */
@@ -24,38 +20,23 @@ export async function POST(req: Request) {
     );
   }
 
-	const { name, alias, token, model_name, base_url } = body;
-	if (!name || !alias || !token || !model_name || !base_url?.trim()) {
-		return NextResponse.json(
-			{ ok: false, error: "name / alias / token / model_name / base_url 均为必填" },
-      { status: 400 }
-    );
-  }
-  if (!validAlias(alias)) {
+  const normalized = normalizeLlmInput(body);
+  if ("error" in normalized) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: "别名仅允许字母、数字、下划线、连字符、点（作为对外模型名）",
-      },
+      { ok: false, error: normalized.error },
       { status: 400 }
     );
   }
+  const { input } = normalized;
 
   try {
-    const created = createLlm({
-      name,
-      alias,
-      token,
-      model_name,
-			base_url: base_url.trim(),
-      enabled: body.enabled,
-    });
+    const created = createLlm(input);
     return NextResponse.json({ ok: true, data: created }, { status: 201 });
   } catch (e) {
     const msg = (e as Error).message;
     if (msg.includes("UNIQUE")) {
       return NextResponse.json(
-        { ok: false, error: `别名 "${alias}" 已存在` },
+        { ok: false, error: `别名 "${input.alias}" 已存在` },
         { status: 409 }
       );
     }

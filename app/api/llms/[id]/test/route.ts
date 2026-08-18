@@ -9,8 +9,8 @@ interface Ctx {
 /**
  * POST /api/llms/[id]/test
  *
- * 使用同一个 Base URL 并行探测 OpenAI（Chat Completions / Responses）与
- * Anthropic 三种协议的工具兼容性。
+ * 使用各协议选定的 Base URL 并行探测 OpenAI（Chat Completions / Responses）
+ * 与 Anthropic 三种协议的工具兼容性。
  */
 export async function POST(_req: Request, { params }: Ctx) {
   const { id } = await params;

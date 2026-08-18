@@ -16,9 +16,8 @@ import type { Protocol } from "@/lib/types";
  *   /v1/responses        → openai-responses
  *   /v1/messages          → anthropic
  *
- * 后端协议由该 LLM 配置的 baseURL 决定：
- *   - 配了与客户端同协议的 baseURL → 同格式透传
- *   - 未配置同协议 baseURL → 报错，不执行格式转换
+ * OpenAI Chat / Responses 使用 OpenAI Base URL，Anthropic 使用其独立 URL。
+ * 全程同格式透传，不执行协议转换。
  */
 export async function handleRelay(
   req: Request,
@@ -63,6 +62,15 @@ export async function handleRelay(
 
   // 4) 严格按客户端协议选择同协议后端
   const backend = pickBackend(llm, clientProtocol);
+  if (!backend) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `LLM「${llm.name}」没有配置 ${clientProtocol === "anthropic" ? "Anthropic" : "OpenAI"} Base URL。`,
+      },
+      { status: 422 }
+    );
+  }
   // 5) 执行中转
   const result = await relayRequest(
     llm,

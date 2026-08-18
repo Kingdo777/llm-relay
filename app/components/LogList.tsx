@@ -248,6 +248,7 @@ export function LogList() {
                 <th>状态</th>
                 <th>流式</th>
                 <th>HTTP</th>
+                <th>Token</th>
                 <th>耗时</th>
                 <th></th>
               </tr>
@@ -278,6 +279,9 @@ export function LogList() {
                   </td>
                   <td className="mono">
                     {r.status_code != null ? r.status_code : "—"}
+                  </td>
+                  <td className="mono">
+                    {r.total_tokens != null ? r.total_tokens : "—"}
                   </td>
                   <td className="mono">{fmtDuration(r.duration_ms)}</td>
                   <td>
@@ -334,6 +338,9 @@ export function LogList() {
             </div>
             <div className="drawer-body">
               将永久删除当前筛选条件下的 <b>{total}</b> 条日志。
+              <div className="stats-preserved-note" style={{ marginTop: 8 }}>
+                统计数据会独立保留，不影响看板中的请求、Token 与响应速度历史。
+              </div>
               {!filterLlm && !filterStatus && (
                 <div className="danger-text" style={{ marginTop: 8 }}>
                   当前没有筛选条件，这会清空全部请求日志。
@@ -386,7 +393,8 @@ export function LogList() {
                       {detail.protocol} ·{" "}
                       {detail.is_stream === 1 ? "流式" : detail.is_stream === 0 ? "非流式" : "流式未知"} ·{" "}
                       HTTP {detail.status_code ?? "—"} ·{" "}
-                      {fmtDuration(detail.duration_ms)} ·{" "}
+                      完整耗时 {fmtDuration(detail.duration_ms)} ·{" "}
+                      首字节 {detail.first_byte_ms == null ? "—" : fmtDuration(detail.first_byte_ms)} ·{" "}
                       {fmtTime(detail.created_at)}
                     </div>
                   </div>
@@ -429,6 +437,15 @@ export function LogList() {
                       <div className="value mono">{detail.model_name}</div>
                     </div>
                   )}
+
+                  <div className="detail-row">
+                    <div className="label">Token 用量</div>
+                    <div className="value mono">
+                      {detail.total_tokens == null
+                        ? "上游未返回 usage"
+                        : `总计 ${detail.total_tokens} · 输入 ${detail.input_tokens ?? 0} · 输出 ${detail.output_tokens ?? 0}`}
+                    </div>
+                  </div>
 
                   {detailView === "parsed" && detail.parsed_input && detail.parsed_output ? (
                     <>

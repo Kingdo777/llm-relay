@@ -1,17 +1,24 @@
 # 🔀 LLM 中转站
 
-一个单体 LLM 请求中转代理，带两个管理页面。支持 OpenAI（Chat Completions / Responses）与 Anthropic 三种端点格式的**同格式透传**（含 SSE 流式），中转时自动注入鉴权头并覆盖模型名。
+一个单体 LLM 请求中转代理，带配置、日志与统计看板。支持 OpenAI（Chat Completions / Responses）与 Anthropic 三种端点格式的**同格式透传**（含 SSE 流式），中转时自动注入鉴权头并覆盖模型名。
 
 ## 功能
 
-- **页面一：LLM 管理** (`/llms`)
-  - 增删改查 LLM 配置：别名、统一 Base URL、Token、模型名、启用开关
+- **统计看板** (`/stats`)
+  - 近 24 小时按模型展示当前/峰值 RPM、TPM、输入/输出 Token、成功/失败数与成功率
+  - 可从下拉列表切换“总览”或任一模型，复用同一套指标与图表；总览保留按模型拆分列表
+  - RPM 与 TPM 按分钟展示，可切换近 24 小时、12 小时、6 小时、1 小时或 10 分钟；另提供最近 14 天每日 Token 消耗
+  - 平均/P95 完整耗时、首字节时间与输出 Token 速度
+- **LLM 管理** (`/llms`)
+  - 增删改查 LLM 配置：别名、Base URL 模式、Token、模型名、启用开关
+  - Base URL 可选择三种协议共用的“合一”模式，或 OpenAI / Anthropic 各自输入的“分离”模式
   - **兼容性测试**：一次探测 OpenAI 与 Anthropic 工具协议并持久化支持状态
   - 每条 LLM 旁显示中转地址，带**一键复制 icon**
-- **页面二：请求日志** (`/logs`)
-  - 每次中转请求的详情：输入、输出、耗时、HTTP 状态码、成功与否、失败原因
+- **请求日志** (`/logs`)
+  - 每次中转请求的详情：输入、输出、Token、首字节/完整耗时、HTTP 状态码、成功与否、失败原因
   - 可按 LLM、状态筛选，分页
-- **核心中转**：`/api/relay/{别名}/{...上游路径}`
+  - 日志明细与轻量统计数据独立存储；清理日志不会删除统计看板历史
+- **核心中转**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`
   - 客户端无需自带鉴权，token 由中转站注入
   - 同格式透传：OpenAI→OpenAI、Anthropic→Anthropic
   - 完整支持 SSE 流式，边透传边记录到日志
@@ -29,12 +36,17 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 客户端把 **base url 填成 `http://<host>:<port>`**，SDK 会自动拼出上面的路径。
 **model 填成目标 LLM 的别名**（在管理页配置时指定），token 随意填或忽略。
 
-每个 LLM 只配置一个 **Base URL**。地址末尾带或不带 `/v1` 均可，relay 会避免重复拼接。
+每个 LLM 可选择 Base URL 配置模式：
+
+- **合一**：OpenAI Chat、Responses 与 Anthropic 共用一个 Base URL。
+- **分离**：OpenAI Chat / Responses 共用 OpenAI Base URL，Anthropic 使用 Anthropic Base URL。例如 DeepSeek 可分别配置 `https://api.deepseek.com` 与 `https://api.deepseek.com/anthropic`。
+
+地址末尾带或不带 `/v1` 均可，relay 会避免重复拼接。
 
 中转逻辑：
 1. 请求路径末段决定协议（`chat/completions`→OpenAI Chat，`responses`→OpenAI Responses，`messages`→Anthropic）
 2. 请求体里的 `model`（= 别名）决定路由到哪个 LLM
-3. 使用该 LLM 的统一 Base URL 拼接协议端点，注入对应鉴权头，把 model 覆盖为真实模型名后原样转发
+3. 按协议选择该 LLM 的 OpenAI 或 Anthropic Base URL，拼接协议端点并注入对应鉴权头，把 model 覆盖为真实模型名后原样转发
 
 示例（配了别名 `gpt4` 的 LLM）：
 
@@ -42,7 +54,7 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 curl http://localhost:3000/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"gpt4","messages":[{"role":"user","content":"你好"}]}'
-# 中转站把 model 覆盖为该 LLM 配置的真实模型名，转发到统一 Base URL 的 OpenAI 端点
+# 中转站把 model 覆盖为该 LLM 配置的真实模型名，转发到 OpenAI Base URL
 ```
 
 多个 LLM 用同一个固定地址，靠 model(别名) 区分。
@@ -74,16 +86,19 @@ app/
     llms/[id]/test/route.ts  # POST 测试连接
     logs/route.ts            # GET 日志列表（分页/筛选）
     logs/[id]/route.ts       # GET 单条详情
-    v1/chat/completions/route.ts  # OpenAI Chat Completions 协议中转入口（固定地址）
-    v1/responses/route.ts          # OpenAI Responses 协议中转入口（固定地址）
-    v1/messages/route.ts          # Anthropic 协议中转入口（固定地址）
+    stats/route.ts           # GET 近 24 小时统计
+  v1/chat/completions/route.ts  # OpenAI Chat Completions 协议中转入口（固定地址）
+  v1/responses/route.ts          # OpenAI Responses 协议中转入口（固定地址）
+  v1/messages/route.ts           # Anthropic 协议中转入口（固定地址）
   components/               # 前端组件
   llms/page.tsx             # 页面一
   logs/page.tsx             # 页面二
+  stats/page.tsx            # 统计看板
 lib/
   db.ts                     # SQLite 单例 + CRUD
   proxy.ts                  # 中转逻辑（透传 + SSE + 日志）
   format.ts                 # 协议判断 / 鉴权头注入 / model 覆盖
+  usage.ts                  # OpenAI / Anthropic usage 提取
   test-llm.ts               # 测试连接
   types.ts
 ```
@@ -93,4 +108,5 @@ lib/
 - Token 明文存储于本地 SQLite，适合个人/内网使用。
 - 中转站会自动解压上游响应（去掉 `content-encoding`），便于记录与转发。
 - 流式响应（SSE）的输出会被拼接成完整文本存入日志。
+- Token 统计以供应商返回的 usage 为准；上游不返回 usage 时不做字符数估算。OpenAI Chat 流式请求会自动启用 `stream_options.include_usage`。
 - 删除 LLM 后历史日志保留（`llm_id` 置空），不影响审计。

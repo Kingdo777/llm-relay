@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { getLlm, updateLlm, deleteLlm } from "@/lib/db";
 import type { LlmInput } from "@/lib/types";
+import { normalizeLlmInput } from "@/lib/llm-input";
 
 interface Ctx {
   params: Promise<{ id: string }>;
-}
-
-function validAlias(a: string): boolean {
-  return /^[A-Za-z0-9_.-]+$/.test(a);
 }
 
 /** GET /api/llms/[id] */
@@ -36,31 +33,16 @@ export async function PUT(req: Request, { params }: Ctx) {
     );
   }
 
-	const { name, alias, token, model_name, base_url } = body;
-	if (!name || !alias || !token || !model_name || !base_url?.trim()) {
-		return NextResponse.json(
-			{ ok: false, error: "name / alias / token / model_name / base_url 均为必填" },
-      { status: 400 }
-    );
-  }
-  if (!validAlias(alias)) {
+  const normalized = normalizeLlmInput(body);
+  if ("error" in normalized) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: "别名仅允许字母、数字、下划线、连字符、点",
-      },
+      { ok: false, error: normalized.error },
       { status: 400 }
     );
   }
+  const { input } = normalized;
   try {
-    const updated = updateLlm(numId, {
-      name,
-      alias,
-      token,
-      model_name,
-			base_url: base_url.trim(),
-      enabled: body.enabled,
-    });
+    const updated = updateLlm(numId, input);
     if (!updated)
       return NextResponse.json(
         { ok: false, error: "未找到" },
@@ -71,7 +53,7 @@ export async function PUT(req: Request, { params }: Ctx) {
     const msg = (e as Error).message;
     if (msg.includes("UNIQUE")) {
       return NextResponse.json(
-        { ok: false, error: `别名 "${alias}" 已存在` },
+        { ok: false, error: `别名 "${input.alias}" 已存在` },
         { status: 409 }
       );
     }

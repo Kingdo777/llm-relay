@@ -1,4 +1,4 @@
-import type { Protocol } from "./types";
+import type { LlmRow, Protocol } from "./types";
 
 /** 各协议对应的后端 API 子路径。 */
 export const UPSTREAM_PATH: Record<Protocol, string> = {
@@ -6,6 +6,13 @@ export const UPSTREAM_PATH: Record<Protocol, string> = {
   "openai-responses": "v1/responses",
   anthropic: "v1/messages",
 };
+
+/** OpenAI Chat / Responses 共用 OpenAI URL，Anthropic 使用独立 URL。 */
+export function baseUrlForProtocol(llm: LlmRow, protocol: Protocol): string {
+  return protocol === "anthropic"
+    ? llm.anthropic_base_url
+    : llm.openai_base_url;
+}
 
 /**
  * 根据请求路径末段判断协议：
@@ -110,4 +117,24 @@ export function rewriteModel(
     return { ok: true, body: JSON.stringify(parsed) };
   }
   return { ok: true, body };
+}
+
+/**
+ * 流式 Chat Completions 默认不返回 usage。为保证 TPM 统计完整，向兼容
+ * OpenAI 的上游请求 usage 事件；其它协议自身会在流事件中返回 usage。
+ */
+export function requestStreamUsage(body: string, protocol: Protocol): string {
+  if (protocol !== "openai" || !body.trim()) return body;
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    if (parsed.stream !== true) return body;
+    const current =
+      parsed.stream_options && typeof parsed.stream_options === "object"
+        ? (parsed.stream_options as Record<string, unknown>)
+        : {};
+    parsed.stream_options = { ...current, include_usage: true };
+    return JSON.stringify(parsed);
+  } catch {
+    return body;
+  }
 }

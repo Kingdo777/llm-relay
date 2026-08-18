@@ -6,9 +6,12 @@ import {
   UPSTREAM_PATH,
   inferProtocolFromPath,
   extractModel,
+  baseUrlForProtocol,
+  requestStreamUsage,
 } from "./format";
 import { insertLog, updateLog } from "./db";
 import { compactLogInput } from "./log-parser";
+import { extractTokenUsage } from "./usage";
 
 export interface RelayResult {
   response: Response;
@@ -31,14 +34,20 @@ function clamp(s: string, max: number): string {
  * 选后端协议与 baseURL。
  * 规则：
  *   - 请求路径决定协议
- *   - 三种协议共用同一个后端 baseURL
+ *   - OpenAI Chat / Responses 走 OpenAI Base URL
+ *   - Anthropic Messages 走 Anthropic Base URL
  *   - 不执行协议转换
  */
 export function pickBackend(
   llm: LlmRow,
   clientProtocol: Protocol
-): { backendProtocol: Protocol; baseUrl: string } {
-  return { backendProtocol: clientProtocol, baseUrl: llm.base_url };
+): { backendProtocol: Protocol; baseUrl: string } | null {
+  const baseUrl = baseUrlForProtocol(llm, clientProtocol);
+  if (!baseUrl) return null;
+  return {
+    backendProtocol: clientProtocol,
+    baseUrl,
+  };
 }
 
 /**
@@ -73,7 +82,8 @@ export async function relayRequest(
   );
 
   const rewritten = rewriteModel(rawBody, llm.model_name);
-  const outBody = rewritten.ok ? rewritten.body : rawBody;
+  const rewrittenBody = rewritten.ok ? rewritten.body : rawBody;
+  const outBody = requestStreamUsage(rewrittenBody, backendProtocol);
 
   // 先写一条 streaming 状态的日志占位（无论成败都留痕）
   // protocol 字段记录客户端协议（用户看到的是"我用什么协议请求的"）
@@ -133,6 +143,7 @@ export async function relayRequest(
   }
 
   const status = response.status;
+  const responseStartedMs = Date.now() - start;
   const contentType = response.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream");
 
@@ -156,12 +167,24 @@ export async function relayRequest(
     let accumulated = "";
     let finalized = false;
     let streamError = "";
+    let firstByteMs: number | null = null;
 
     const finalize = () => {
       if (finalized) return;
       finalized = true;
       const duration_ms = Date.now() - start;
       const ok = status >= 200 && status < 300;
+      const usage = extractTokenUsage(accumulated);
+      const measurements = {
+        first_byte_ms: firstByteMs ?? responseStartedMs,
+        ...(usage
+          ? {
+              input_tokens: usage.inputTokens,
+              output_tokens: usage.outputTokens,
+              total_tokens: usage.totalTokens,
+            }
+          : {}),
+      };
       if (streamError) {
         updateLog(logId, {
           status: "failed",
@@ -170,6 +193,7 @@ export async function relayRequest(
           duration_ms,
           status_code: status,
           is_stream: isSSE ? 1 : 0,
+          ...measurements,
         });
       } else {
         updateLog(logId, {
@@ -179,6 +203,7 @@ export async function relayRequest(
           duration_ms,
           status_code: status,
           is_stream: isSSE ? 1 : 0,
+          ...measurements,
         });
       }
     };
@@ -191,6 +216,9 @@ export async function relayRequest(
             controller.close();
             finalize();
             return;
+          }
+          if (firstByteMs === null && value.byteLength > 0) {
+            firstByteMs = Date.now() - start;
           }
           const text = decoder.decode(value, { stream: true });
           accumulated += text;
@@ -228,6 +256,7 @@ export async function relayRequest(
       duration_ms: Date.now() - start,
       status_code: status,
       is_stream: isSSE ? 1 : 0,
+      first_byte_ms: responseStartedMs,
     });
     return {
       response: new Response(
@@ -240,6 +269,7 @@ export async function relayRequest(
 
   const duration_ms = Date.now() - start;
   const ok = status >= 200 && status < 300;
+  const usage = extractTokenUsage(bufText);
   updateLog(logId, {
     status: ok ? "success" : "failed",
     error: ok ? null : `上游 HTTP ${status}\n${bufText.slice(0, 2000)}`,
@@ -247,6 +277,14 @@ export async function relayRequest(
     duration_ms,
     status_code: status,
     is_stream: isSSE ? 1 : 0,
+    first_byte_ms: responseStartedMs,
+    ...(usage
+      ? {
+          input_tokens: usage.inputTokens,
+          output_tokens: usage.outputTokens,
+          total_tokens: usage.totalTokens,
+        }
+      : {}),
   });
 
   return {
