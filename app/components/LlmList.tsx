@@ -5,6 +5,8 @@ import { LlmForm } from "./LlmForm";
 import { CopyButton } from "./CopyButton";
 import { useToast } from "./Toast";
 
+type ProtocolKey = "openai" | "openaiResponses" | "anthropic";
+
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
 function useOrigin(): string {
   const [origin, setOrigin] = useState("");
@@ -21,6 +23,8 @@ export function LlmList() {
   const [showForm, setShowForm] = useState(false);
 
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
+  const [testResults, setTestResults] = useState<Record<number, ProtocolSupportResult>>({});
+  const [expandedFailure, setExpandedFailure] = useState<Record<number, Set<ProtocolKey>>>({});
   const [pendingDelete, setPendingDelete] = useState<LlmRow | null>(null);
 
   async function load() {
@@ -80,6 +84,8 @@ export function LlmList() {
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "测试失败");
       const result = data.data as ProtocolSupportResult;
+      setTestResults((prev) => ({ ...prev, [l.id]: result }));
+      setExpandedFailure((prev) => ({ ...prev, [l.id]: new Set() }));
       const fmt = (r: { success: boolean }) => (r.success ? "支持" : "不支持");
       show(`「${l.name}」兼容性：OpenAI ${fmt(result.openai)}，Responses ${fmt(result.openaiResponses)}，Anthropic ${fmt(result.anthropic)}`, "success");
       await load();
@@ -92,6 +98,45 @@ export function LlmList() {
         return next;
       });
     }
+  }
+
+  function isSupportedFromDb(l: LlmRow, key: ProtocolKey): boolean | null {
+    if (key === "openai") return l.openai_supported === 1 ? true : l.openai_supported === 0 ? false : null;
+    if (key === "openaiResponses") return l.openai_responses_supported === 1 ? true : l.openai_responses_supported === 0 ? false : null;
+    return l.anthropic_supported === 1 ? true : l.anthropic_supported === 0 ? false : null;
+  }
+
+  function getProtocolState(
+    l: LlmRow,
+    key: ProtocolKey
+  ):
+    | { label: string; cls: "supported" | "unsupported" | "unknown"; success: boolean | null; detail: string | null }
+  {
+    const result = testResults[l.id]?.[key];
+    if (result) {
+      return {
+        label: result.success ? "支持" : "不支持",
+        cls: result.success ? "supported" : "unsupported",
+        success: result.success,
+        detail: result.success ? null : (result.detail || result.message || "无详细信息"),
+      };
+    }
+    const support = isSupportedFromDb(l, key);
+    return {
+      label: support === null ? "未测试" : support ? "支持" : "不支持",
+      cls: support === null ? "unknown" : support ? "supported" : "unsupported",
+      success: support,
+      detail: null,
+    };
+  }
+
+  function toggleFailureReason(id: number, key: ProtocolKey) {
+    setExpandedFailure((prev) => {
+      const current = new Set(prev[id] ?? []);
+      if (current.has(key)) current.delete(key);
+      else current.add(key);
+      return { ...prev, [id]: current };
+    });
   }
 
   async function confirmDelete() {
@@ -278,7 +323,6 @@ export function LlmList() {
             <tbody>
               {list.map((l) => {
                 const testing = testingIds.has(l.id);
-                const supportLabel = (value: 0 | 1 | null) => value === null ? "未测试" : value ? "支持" : "不支持";
                 return (
                   <tr key={l.id}>
                     <td>{l.name}</td>
@@ -316,15 +360,44 @@ export function LlmList() {
                     </td>
                     <td>
                       <div className="protocol-supports">
-                        <span className={`protocol-badge ${l.openai_supported === null ? "unknown" : l.openai_supported ? "supported" : "unsupported"}`}>
-                          OpenAI · {supportLabel(l.openai_supported)}
-                        </span>
-                        <span className={`protocol-badge ${l.openai_responses_supported === null ? "unknown" : l.openai_responses_supported ? "supported" : "unsupported"}`}>
-                          Responses · {supportLabel(l.openai_responses_supported)}
-                        </span>
-                        <span className={`protocol-badge ${l.anthropic_supported === null ? "unknown" : l.anthropic_supported ? "supported" : "unsupported"}`}>
-                          Anthropic · {supportLabel(l.anthropic_supported)}
-                        </span>
+                        {(
+                          [
+                            { label: "OpenAI", key: "openai" as ProtocolKey },
+                            {
+                              label: "Responses",
+                              key: "openaiResponses" as ProtocolKey,
+                            },
+                            { label: "Anthropic", key: "anthropic" as ProtocolKey },
+                          ] as const
+                        ).map((protocol) => {
+                          const state = getProtocolState(l, protocol.key);
+                          const expanded = expandedFailure[l.id]?.has(protocol.key) ?? false;
+                          const hasFailure = state.success === false && !!state.detail;
+                          return (
+                            <div key={`${l.id}-${protocol.key}`} style={{ width: "100%" }}>
+                              <span
+                                className={`protocol-badge ${state.cls} ${hasFailure ? "clickable-badge" : ""}`}
+                                onClick={() => {
+                                  if (hasFailure) toggleFailureReason(l.id, protocol.key);
+                                }}
+                                role={hasFailure ? "button" : undefined}
+                                title={
+                                  hasFailure
+                                    ? expanded
+                                      ? "点击收起失败原因"
+                                      : "点击展开失败原因"
+                                    : `${protocol.label} ${state.label}`
+                                }
+                                style={{ cursor: hasFailure ? "pointer" : "default" }}
+                              >
+                                {protocol.label} · {state.label}
+                              </span>
+                              {hasFailure && expanded ? (
+                                <pre className="protocol-failure-detail">{state.detail}</pre>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     </td>
                     <td>

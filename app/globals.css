@@ -717,6 +717,23 @@ td.mono,
   color: var(--danger, #c93434);
   background: color-mix(in srgb, var(--danger, #c93434) 9%, transparent);
 }
+.protocol-badge.clickable-badge:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.protocol-failure-detail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--failed) 30%, var(--border));
+  background: color-mix(in srgb, var(--failed-bg, #f85149) 22%, var(--bg));
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 11px;
+}
 
 /* ---- Base URL 配置 ---- */
 .url-mode-selector {
