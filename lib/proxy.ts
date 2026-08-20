@@ -18,8 +18,6 @@ export interface RelayResult {
   logId: number | null;
 }
 
-/** 默认上游超时（首个字节） */
-const UPSTREAM_TIMEOUT_MS = 120_000;
 /** 输出文本入库的最大长度，超出截断，避免单条日志过大 */
 const MAX_OUTPUT_LEN = 200_000;
 /** 输入文本入库的最大长度 */
@@ -108,17 +106,14 @@ export async function relayRequest(
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : outBody,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch (e) {
     const err = e as Error;
     const cause = (err as { cause?: { code?: string; name?: string } }).cause;
     const duration_ms = Date.now() - start;
     const message =
-      err.name === "TimeoutError" || err.name === "AbortError"
-        ? "上游超时（120s 无响应）"
-        : cause?.name === "ConnectTimeoutError" ||
-          cause?.code === "UND_ERR_CONNECT_TIMEOUT"
+      cause?.name === "ConnectTimeoutError" ||
+      cause?.code === "UND_ERR_CONNECT_TIMEOUT"
         ? "上游连接超时，baseURL 不可达"
         : cause?.code === "ECONNREFUSED"
         ? "上游连接被拒绝（ECONNREFUSED）"
@@ -229,7 +224,8 @@ export async function relayRequest(
           finalize();
         }
       },
-      cancel() {
+      async cancel() {
+        await reader.cancel();
         finalize();
       },
     });
