@@ -276,14 +276,19 @@ function InteractiveLineChart({
               const value = line.values[hoveredIndex] ?? 0;
               const totalValue = rightAxis ? value * rightAxis.multiplier : null;
               return (
-                <span key={line.label}>
+                <div key={line.label} className="tooltip-row">
                   <i style={{ background: line.color }} />
-                  {line.label}
-                  <b>{line.formatValue ? line.formatValue(value) : number(value)}</b>
-                  {totalValue !== null && (
-                    <small> 总量 {rightAxis!.format(totalValue)}</small>
+                  <span className="tooltip-label">{line.label}</span>
+                  {totalValue !== null ? (
+                    <span className="tooltip-values">
+                      <b className="tooltip-avg">{line.formatValue ? line.formatValue(value) : number(value)}</b>
+                      <span className="tooltip-sep">/</span>
+                      <b className="tooltip-total">{rightAxis!.format(totalValue)}</b>
+                    </span>
+                  ) : (
+                    <b>{line.formatValue ? line.formatValue(value) : number(value)}</b>
                   )}
-                </span>
+                </div>
               );
             })}
           </div>
@@ -607,7 +612,6 @@ export function StatsDashboard() {
                 formatTooltipLabel={dailyTooltipLabel}
                 formatAxisLabel={dailyAxisLabel}
                 formatYAxis={tokenWan}
-                rightAxis={showRightAxis ? { multiplier: seriesBucketMinutes, format: tokenWan, label: "总量" } : undefined}
               />
             </article>
           </section>

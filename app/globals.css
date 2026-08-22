@@ -1094,21 +1094,46 @@ td.mono,
   color: var(--text);
   font: 600 11px var(--mono);
 }
-.chart-tooltip > span {
-  display: grid;
-  grid-template-columns: 8px auto 1fr;
+.chart-tooltip .tooltip-row {
+  display: flex;
   align-items: center;
   gap: 6px;
   color: var(--text-muted);
   font-size: 10px;
+  line-height: 1.6;
 }
-.chart-tooltip i {
+.chart-tooltip .tooltip-row > i {
+  flex: 0 0 7px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
 }
+.chart-tooltip .tooltip-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.chart-tooltip .tooltip-values {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-left: auto;
+}
+.chart-tooltip .tooltip-avg {
+  color: var(--text);
+  font: 600 10px var(--mono);
+  white-space: nowrap;
+}
+.chart-tooltip .tooltip-sep {
+  color: var(--text-dim);
+  font-size: 9px;
+}
+.chart-tooltip .tooltip-total {
+  color: var(--text-dim);
+  font: 500 10px var(--mono);
+  white-space: nowrap;
+}
 .chart-tooltip b {
-  justify-self: end;
+  margin-left: auto;
   color: var(--text);
   font: 600 10px var(--mono);
   white-space: nowrap;
