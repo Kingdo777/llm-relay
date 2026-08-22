@@ -645,7 +645,7 @@ function nullableNumeric(row: NumericRow, key: string): number | null {
 }
 
 /** 近 24 小时看板数据；RPM/TPM 峰值按自然分钟聚合，当前值为滚动 60 秒。 */
-export function getDashboardStats(reference = new Date()): DashboardStats {
+export function getDashboardStats(reference = new Date(), seriesBucketMinutes = 1): DashboardStats {
   const generatedAt = reference.toISOString();
   const windowStartedAt = new Date(reference.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const currentStartedAt = new Date(reference.getTime() - 60 * 1000).toISOString();
@@ -774,7 +774,6 @@ export function getDashboardStats(reference = new Date()): DashboardStats {
     FROM minute_stats
   `).get(windowStartedAt) as { peak_rpm: number; peak_tpm: number };
 
-  const seriesBucketMinutes = 1;
   const bucketSeconds = seriesBucketMinutes * 60;
   const seriesPointCount = (24 * 60) / seriesBucketMinutes;
   const lastBucket = Math.floor(reference.getTime() / 1000 / bucketSeconds) * bucketSeconds;

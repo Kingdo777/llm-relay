@@ -13,6 +13,13 @@ const TREND_RANGES = [
   { minutes: 10, label: "10 分钟" },
 ] as const;
 
+const BUCKET_SIZES = [
+  { minutes: 1, label: "1 分钟" },
+  { minutes: 10, label: "10 分钟" },
+  { minutes: 30, label: "30 分钟" },
+  { minutes: 60, label: "1 小时" },
+] as const;
+
 function number(value: number, maximumFractionDigits = 0): string {
   return new Intl.NumberFormat("zh-CN", {
     maximumFractionDigits,
@@ -108,14 +115,35 @@ function InteractiveLineChart({
   const chartWidth = width - left - right;
   const chartHeight = height - top - bottom;
   const max = Math.max(1, ...series.flatMap((line) => line.values));
-  const polyline = (values: number[]) =>
-    values
-      .map((value, index) => {
-        const x = left + (index / Math.max(1, values.length - 1)) * chartWidth;
-        const y = top + chartHeight - (value / max) * chartHeight;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(" ");
+  const pointAt = (values: number[], index: number) => {
+    const x = left + (index / Math.max(1, values.length - 1)) * chartWidth;
+    const y = top + chartHeight - (values[index] / max) * chartHeight;
+    return { x, y };
+  };
+  const chartTop = top;
+  const chartBottom = top + chartHeight;
+  const clampY = (y: number) => Math.max(chartTop, Math.min(chartBottom, y));
+  const smoothPath = (values: number[]) => {
+    if (values.length === 0) return "";
+    if (values.length === 1) {
+      const p = pointAt(values, 0);
+      return `M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+    }
+    const pts = values.map((_, i) => pointAt(values, i));
+    let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] ?? pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] ?? pts[i + 1];
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = clampY(p1.y + (p2.y - p0.y) / 6);
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = clampY(p2.y - (p3.y - p1.y) / 6);
+      d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+    }
+    return d;
+  };
   const axisIndexes = Array.from(
     new Set([0, Math.floor((labels.length - 1) / 2), labels.length - 1])
   ).filter((index) => labels[index]);
@@ -182,9 +210,9 @@ function InteractiveLineChart({
             );
           })}
           {series.map((line) => (
-            <polyline
+            <path
               key={line.label}
-              points={polyline(line.values)}
+              d={smoothPath(line.values)}
               fill="none"
               stroke={line.color}
               strokeWidth="2.5"
@@ -258,11 +286,12 @@ export function StatsDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [scope, setScope] = useState("overview");
   const [trendRangeMinutes, setTrendRangeMinutes] = useState<number>(24 * 60);
+  const [bucketMinutes, setBucketMinutes] = useState<number>(1);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
     try {
-      const response = await fetch("/api/stats", { cache: "no-store" });
+      const response = await fetch(`/api/stats?bucket=${bucketMinutes}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok || !json.ok) throw new Error(json.error || "统计加载失败");
       setStats(json.data as DashboardStats);
@@ -271,7 +300,7 @@ export function StatsDashboard() {
     } finally {
       if (!quiet) setRefreshing(false);
     }
-  }, [show]);
+  }, [show, bucketMinutes]);
 
   useEffect(() => {
     load();
@@ -307,6 +336,7 @@ export function StatsDashboard() {
   const trendRangeLabel = TREND_RANGES.find(
     (range) => range.minutes === trendRangeMinutes
   )?.label ?? `${trendRangeMinutes} 分钟`;
+  const bucketLabel = BUCKET_SIZES.find((bs) => bs.minutes === bucketMinutes)?.label ?? `${bucketMinutes} 分钟`;
   const visibleRequests = visibleSeries.reduce((sum, point) => sum + point.requests, 0);
   const visibleTokens = visibleSeries.reduce((sum, point) => sum + point.tokens, 0);
   const fourteenDayTokens = activeDailyTokens.reduce((sum, point) => sum + point.total_tokens, 0);
@@ -425,20 +455,41 @@ export function StatsDashboard() {
           <div className="trend-range-bar">
             <div className="trend-range-copy">
               <strong>RPM / TPM 时间范围</strong>
-              <span>每分钟一个数据点</span>
+              <span>当前 {bucketLabel} 一个数据点</span>
             </div>
-            <div className="segmented" aria-label="趋势图时间范围">
-              {TREND_RANGES.map((range) => (
-                <button
-                  key={range.minutes}
-                  type="button"
-                  className={trendRangeMinutes === range.minutes ? "active" : ""}
-                  aria-pressed={trendRangeMinutes === range.minutes}
-                  onClick={() => setTrendRangeMinutes(range.minutes)}
-                >
-                  {range.label}
-                </button>
-              ))}
+            <div className="trend-controls">
+              <div className="trend-control-group">
+                <span className="trend-control-label">聚合粒度</span>
+                <div className="segmented" aria-label="趋势图聚合粒度">
+                  {BUCKET_SIZES.map((bs) => (
+                    <button
+                      key={bs.minutes}
+                      type="button"
+                      className={bucketMinutes === bs.minutes ? "active" : ""}
+                      aria-pressed={bucketMinutes === bs.minutes}
+                      onClick={() => setBucketMinutes(bs.minutes)}
+                    >
+                      {bs.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="trend-control-group">
+                <span className="trend-control-label">时间范围</span>
+                <div className="segmented" aria-label="趋势图时间范围">
+                  {TREND_RANGES.map((range) => (
+                    <button
+                      key={range.minutes}
+                      type="button"
+                      className={trendRangeMinutes === range.minutes ? "active" : ""}
+                      aria-pressed={trendRangeMinutes === range.minutes}
+                      onClick={() => setTrendRangeMinutes(range.minutes)}
+                    >
+                      {range.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -447,7 +498,7 @@ export function StatsDashboard() {
               <div className="panel-head">
                 <div>
                   <h2>RPM / 请求趋势</h2>
-                  <p>近 {trendRangeLabel} · 每分钟请求数</p>
+                  <p>近 {trendRangeLabel} · 每 {bucketLabel}</p>
                 </div>
                 <div className="panel-total">
                   合计 <b>{compactNumber(visibleRequests)}</b>
@@ -469,7 +520,7 @@ export function StatsDashboard() {
                     formatValue: (value) => number(value, 1),
                   },
                 ]}
-                ariaLabel={`近 ${trendRangeLabel} 每分钟 RPM 成功和失败折线图`}
+                ariaLabel={`近 ${trendRangeLabel} 每 ${bucketLabel} RPM 成功和失败折线图`}
                 formatTooltipLabel={timeTooltipLabel}
                 formatAxisLabel={timeLabel}
               />
@@ -479,7 +530,7 @@ export function StatsDashboard() {
               <div className="panel-head">
                 <div>
                   <h2>TPM / Token 吞吐</h2>
-                  <p>近 {trendRangeLabel} · 每分钟 Token</p>
+                  <p>近 {trendRangeLabel} · 每 {bucketLabel} Token</p>
                 </div>
                 <div className="panel-total">
                   合计 <b>{tokenWan(visibleTokens)}</b>
@@ -495,7 +546,7 @@ export function StatsDashboard() {
                     formatValue: tokenWan,
                   },
                 ]}
-                ariaLabel={`近 ${trendRangeLabel} 每分钟 TPM 折线图`}
+                ariaLabel={`近 ${trendRangeLabel} 每 ${bucketLabel} TPM 折线图`}
                 formatTooltipLabel={timeTooltipLabel}
                 formatAxisLabel={timeLabel}
                 formatYAxis={tokenWan}

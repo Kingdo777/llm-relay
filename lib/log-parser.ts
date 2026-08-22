@@ -6,7 +6,7 @@ import type {
   Protocol,
 } from "./types";
 
-export const LOG_PARSER_VERSION = 7;
+export const LOG_PARSER_VERSION = 9;
 type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {
@@ -210,12 +210,14 @@ export function parseLogInput(raw: string | null): ParsedLogContent {
       ? { entries }
       : { entries: [{ role: "request", blocks: [dataBlock("request", value)] }] };
   } catch {
-    const messages = extractJsonArray(raw, "messages")
-      ?? extractCompleteObjectsFromArray(raw, "messages");
-    if (messages) {
+    let messages = extractJsonArray(raw, "messages");
+    if (!messages?.length) messages = extractCompleteObjectsFromArray(raw, "messages");
+    if (!messages?.length) messages = extractJsonArray(raw, "input");
+    if (!messages?.length) messages = extractCompleteObjectsFromArray(raw, "input");
+    if (messages?.length) {
       const entries = parseMessages({ messages });
       if (entries.length) {
-        return { entries, warnings: ["请求日志被截断，已恢复其中完整的 messages 内容。"] };
+        return { entries, warnings: ["请求日志被截断，已恢复其中完整的 messages/input 内容。"] };
       }
     }
     return { entries: [{ role: "request", blocks: [textBlock(raw)] }], warnings: ["请求体不是完整 JSON，已按原始文本展示。"] };
@@ -351,6 +353,37 @@ function parseOpenAiResponsesStream(raw: string): ParsedLogContent {
         }
       }
     } catch { warnings.push("部分 Responses SSE 事件不是完整 JSON，已跳过。"); }
+  }
+  // Fallback: 从 response.completed 事件提取最终内容
+  for (const event of events) {
+    if (event.data === "[DONE]") continue;
+    try {
+      const value = JSON.parse(event.data) as JsonObject;
+      if (value.type === "response.completed" && isObject(value.response)) {
+        const resp = value.response as JsonObject;
+        if (Array.isArray(resp.output)) {
+          for (const item of resp.output) {
+            if (!isObject(item)) continue;
+            if (item.type === "message" && Array.isArray(item.content)) {
+              for (const part of item.content) {
+                if (isObject(part) && (part.type === "output_text" || part.type === "text") && typeof part.text === "string" && part.text) {
+                  const idx = 0;
+                  if (!(texts.get(idx) ?? "")) texts.set(idx, part.text);
+                }
+              }
+            }
+            if (item.type === "reasoning" && Array.isArray(item.summary)) {
+              for (const s of item.summary) {
+                if (isObject(s) && typeof s.text === "string" && s.text) {
+                  const idx = 0;
+                  if (!(reasoning.get(idx) ?? "")) reasoning.set(idx, s.text);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch { /* already warned above */ }
   }
   const blocks: ParsedLogBlock[] = [...reasoning]
     .sort(([a], [b]) => a - b)

@@ -949,6 +949,22 @@ td.mono,
 .trend-range-bar .segmented button {
   white-space: nowrap;
 }
+.trend-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.trend-control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trend-control-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .chart-panel,
 .models-panel {
   margin-bottom: 16px;
