@@ -287,6 +287,7 @@ export function StatsDashboard() {
   const [scope, setScope] = useState("overview");
   const [trendRangeMinutes, setTrendRangeMinutes] = useState<number>(24 * 60);
   const [bucketMinutes, setBucketMinutes] = useState<number>(1);
+  const [rateMode, setRateMode] = useState<"avg" | "total">("avg");
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -333,10 +334,14 @@ export function StatsDashboard() {
     : stats?.daily_tokens ?? [];
   const seriesBucketMinutes = stats?.series_bucket_minutes ?? 1;
   const perMinute = (value: number) => value / seriesBucketMinutes;
+  const rateValue = (value: number) => rateMode === "avg" ? perMinute(value) : value;
   const trendRangeLabel = TREND_RANGES.find(
     (range) => range.minutes === trendRangeMinutes
   )?.label ?? `${trendRangeMinutes} 分钟`;
   const bucketLabel = BUCKET_SIZES.find((bs) => bs.minutes === bucketMinutes)?.label ?? `${bucketMinutes} 分钟`;
+  const rateLabel = rateMode === "avg" ? "桶均值" : "桶总量";
+  const rpmLabel = bucketMinutes === 1 ? "RPM" : rateMode === "avg" ? "桶均 RPM" : "桶请求";
+  const tpmLabel = bucketMinutes === 1 ? "TPM" : rateMode === "avg" ? "桶均 TPM" : "桶 Token";
   const visibleRequests = visibleSeries.reduce((sum, point) => sum + point.requests, 0);
   const visibleTokens = visibleSeries.reduce((sum, point) => sum + point.tokens, 0);
   const fourteenDayTokens = activeDailyTokens.reduce((sum, point) => sum + point.total_tokens, 0);
@@ -490,6 +495,27 @@ export function StatsDashboard() {
                   ))}
                 </div>
               </div>
+              <div className="trend-control-group">
+                <span className="trend-control-label">显示方式</span>
+                <div className="segmented" aria-label="趋势图显示方式">
+                  <button
+                    type="button"
+                    className={rateMode === "avg" ? "active" : ""}
+                    aria-pressed={rateMode === "avg"}
+                    onClick={() => setRateMode("avg")}
+                  >
+                    桶均值
+                  </button>
+                  <button
+                    type="button"
+                    className={rateMode === "total" ? "active" : ""}
+                    aria-pressed={rateMode === "total"}
+                    onClick={() => setRateMode("total")}
+                  >
+                    桶总量
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -497,7 +523,7 @@ export function StatsDashboard() {
             <article className="chart-panel compact-chart-panel">
               <div className="panel-head">
                 <div>
-                  <h2>RPM / 请求趋势</h2>
+                  <h2>{rpmLabel} / 请求趋势</h2>
                   <p>近 {trendRangeLabel} · 每 {bucketLabel}</p>
                 </div>
                 <div className="panel-total">
@@ -510,13 +536,13 @@ export function StatsDashboard() {
                   {
                     label: "成功",
                     color: "#3fb950",
-                    values: visibleSeries.map((point) => perMinute(point.successful_requests)),
+                    values: visibleSeries.map((point) => rateValue(point.successful_requests)),
                     formatValue: (value) => number(value, 1),
                   },
                   {
                     label: "失败",
                     color: "#f85149",
-                    values: visibleSeries.map((point) => perMinute(point.failed_requests)),
+                    values: visibleSeries.map((point) => rateValue(point.failed_requests)),
                     formatValue: (value) => number(value, 1),
                   },
                 ]}
@@ -529,7 +555,7 @@ export function StatsDashboard() {
             <article className="chart-panel compact-chart-panel">
               <div className="panel-head">
                 <div>
-                  <h2>TPM / Token 吞吐</h2>
+                  <h2>{tpmLabel} / Token 吞吐</h2>
                   <p>近 {trendRangeLabel} · 每 {bucketLabel} Token</p>
                 </div>
                 <div className="panel-total">
@@ -542,7 +568,7 @@ export function StatsDashboard() {
                   {
                     label: "Token",
                     color: "#a371f7",
-                    values: visibleSeries.map((point) => perMinute(point.tokens)),
+                    values: visibleSeries.map((point) => rateValue(point.tokens)),
                     formatValue: tokenWan,
                   },
                 ]}
