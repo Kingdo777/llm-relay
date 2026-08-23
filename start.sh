@@ -27,8 +27,8 @@ if ! command -v sha256sum >/dev/null 2>&1; then
   echo "未找到 sha256sum，请先安装 coreutils。" >&2
   exit 1
 fi
-if [[ ! -f package.json || ! -f package-lock.json ]]; then
-  echo "缺少 package.json 或 package-lock.json，无法安装依赖。" >&2
+if [[ ! -f package.json ]]; then
+  echo "缺少 package.json，无法启动。" >&2
   exit 1
 fi
 if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
@@ -55,26 +55,6 @@ if ! node -e '
 ' "$HOST" "$PORT"; then
   echo "端口 $PORT 已被占用，无法启动 llm-relay。" >&2
   exit 1
-fi
-
-# 全新环境自动安装依赖；依赖清单变化时也重新执行 npm ci。
-# 哈希标记放在 node_modules 内，npm ci 重建目录后再写入。
-DEPENDENCY_STAMP="$ROOT/node_modules/.llm-relay-dependency-hash"
-DEPENDENCY_HASH="$({ sha256sum package.json package-lock.json; } | sha256sum | cut -d ' ' -f 1)"
-INSTALLED_HASH=""
-if [[ -f "$DEPENDENCY_STAMP" ]]; then
-  INSTALLED_HASH="$(cat "$DEPENDENCY_STAMP")"
-fi
-
-if [[ ! -d node_modules || "$INSTALLED_HASH" != "$DEPENDENCY_HASH" ]]; then
-  echo "首次运行或依赖清单已变化，执行 npm ci..."
-  if ! npm ci >>"$LOG_FILE" 2>&1; then
-    echo "依赖安装失败，请查看日志: $LOG_FILE" >&2
-    exit 1
-  fi
-  printf '%s\n' "$DEPENDENCY_HASH" >"$DEPENDENCY_STAMP"
-else
-  echo "依赖未变化，跳过安装。"
 fi
 
 # 默认仅在源码、配置或依赖清单变化时重新 build。
