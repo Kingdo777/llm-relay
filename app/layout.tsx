@@ -8,6 +8,9 @@ export const metadata: Metadata = {
   description: "LLM 请求中转代理 + 配置与日志管理",
 };
 
+// 管理端页面必须随部署立即更新，避免共享缓存继续引用旧前端 bundle。
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: {
