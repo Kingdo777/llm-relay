@@ -77,8 +77,8 @@ npm run start      # 生产启动
 ## 容器镜像
 
 ```bash
-docker build -t nvwa-llm-relay:latest .
-docker run -d --name nvwa-llm-relay -p 3001:3001 -v llm-relay-data:/data nvwa-llm-relay:latest
+docker build -t registry.cn-hangzhou.aliyuncs.com/kingdo/nvwa-llm-relay:latest .
+docker run -d --name nvwa-llm-relay -p 3001:3001 -v llm-relay-data:/data registry.cn-hangzhou.aliyuncs.com/kingdo/nvwa-llm-relay:latest
 ```
 
 NVWA 节点安装器会把容器内固定端口 `3001` 映射到节点上的动态空闲端口。
