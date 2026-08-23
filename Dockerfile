@@ -14,8 +14,7 @@ ENV NODE_ENV=production \
     DATA_DIR=/data
 WORKDIR /app
 COPY --from=build /app ./
-RUN mkdir -p /data && chown -R node:node /app /data
-USER node
+RUN mkdir -p /data
 VOLUME ["/data"]
 EXPOSE 3001
 CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3001"]

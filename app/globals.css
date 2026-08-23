@@ -333,6 +333,20 @@ td.mono,
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.relay-endpoints {
+  display: flex;
+  gap: 18px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.relay-endpoints > div {
+  flex: 1 0 280px;
+  min-width: 0;
+}
+.relay-endpoints .url-cell {
+  min-width: 0;
+  max-width: none;
+}
 
 /* ---- 模态/抽屉 ---- */
 .overlay {

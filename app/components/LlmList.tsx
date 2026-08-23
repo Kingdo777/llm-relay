@@ -332,56 +332,58 @@ export function LlmList() {
         </div>
         {relayBase ? (
           <>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                OpenAI:
-              </span>
-              <span className="url-cell" style={{ flex: 1 }}>
-                <span
-                  className="url-text"
-                  title={`${relayBase}/v1/chat/completions`}
-                >
-                  {relayBase}/v1/chat/completions
+            <div className="relay-endpoints">
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
+                  OpenAI:
                 </span>
-                <CopyButton
-                  value={`${relayBase}/v1/chat/completions`}
-                  iconOnly
-                />
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                Responses:
-              </span>
-              <span className="url-cell" style={{ flex: 1 }}>
-                <span
-                  className="url-text"
-                  title={`${relayBase}/v1/responses`}
-                >
-                  {relayBase}/v1/responses
+                <span className="url-cell" style={{ flex: 1 }}>
+                  <span
+                    className="url-text"
+                    title={`${relayBase}/v1/chat/completions`}
+                  >
+                    {relayBase}/v1/chat/completions
+                  </span>
+                  <CopyButton
+                    value={`${relayBase}/v1/chat/completions`}
+                    iconOnly
+                  />
                 </span>
-                <CopyButton
-                  value={`${relayBase}/v1/responses`}
-                  iconOnly
-                />
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                Anthropic:
-              </span>
-              <span className="url-cell" style={{ flex: 1 }}>
-                <span
-                  className="url-text"
-                  title={`${relayBase}/v1/messages`}
-                >
-                  {relayBase}/v1/messages
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
+                  Responses:
                 </span>
-                <CopyButton
-                  value={`${relayBase}/v1/messages`}
-                  iconOnly
-                />
-              </span>
+                <span className="url-cell" style={{ flex: 1 }}>
+                  <span
+                    className="url-text"
+                    title={`${relayBase}/v1/responses`}
+                  >
+                    {relayBase}/v1/responses
+                  </span>
+                  <CopyButton
+                    value={`${relayBase}/v1/responses`}
+                    iconOnly
+                  />
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
+                  Anthropic:
+                </span>
+                <span className="url-cell" style={{ flex: 1 }}>
+                  <span
+                    className="url-text"
+                    title={`${relayBase}/v1/messages`}
+                  >
+                    {relayBase}/v1/messages
+                  </span>
+                  <CopyButton
+                    value={`${relayBase}/v1/messages`}
+                    iconOnly
+                  />
+                </span>
+              </div>
             </div>
             <div className="hint" style={{ marginTop: 2 }}>
               客户端 base 填 <b>{relayBase}</b>，model 填对应 LLM
