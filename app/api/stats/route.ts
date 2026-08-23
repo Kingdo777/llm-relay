@@ -10,10 +10,18 @@ export async function GET(req: Request) {
   const parsed = raw ? Number(raw) : 1;
   const bucket =
     Number.isFinite(parsed) && parsed > 0 && Number.isInteger(parsed) ? parsed : 1;
-  return NextResponse.json(
-    { ok: true, data: getDashboardStats(new Date(), bucket) },
-    { headers: { "cache-control": "no-store" } }
-  );
+  try {
+    return NextResponse.json(
+      { ok: true, data: getDashboardStats(new Date(), bucket) },
+      { headers: { "cache-control": "no-store" } }
+    );
+  } catch (error) {
+    console.error("Failed to load dashboard stats", error);
+    return NextResponse.json(
+      { ok: false, error: `统计加载失败：${(error as Error).message}` },
+      { status: 500, headers: { "cache-control": "no-store" } }
+    );
+  }
 }
 
 export const dynamic = "force-dynamic";

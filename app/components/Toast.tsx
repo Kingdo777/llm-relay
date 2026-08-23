@@ -3,6 +3,8 @@ import {
   createContext,
   useCallback,
   useContext,
+  useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -28,23 +30,19 @@ export function useToast() {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
-  // 用 ref 计数避免依赖 Math.random
-  const [counter, setCounter] = useState(0);
+  const counterRef = useRef(0);
 
-  const show = useCallback(
-    (message: string, kind: ToastKind = "info") => {
-      const id = counter + 1;
-      setCounter(id);
-      setItems((prev) => [...prev, { id, kind, message }]);
-      setTimeout(() => {
-        setItems((prev) => prev.filter((t) => t.id !== id));
-      }, 4000);
-    },
-    [counter]
-  );
+  const show = useCallback((message: string, kind: ToastKind = "info") => {
+    const id = ++counterRef.current;
+    setItems((prev) => [...prev, { id, kind, message }]);
+    setTimeout(() => {
+      setItems((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  }, []);
+  const contextValue = useMemo(() => ({ show }), [show]);
 
   return (
-    <Ctx.Provider value={{ show }}>
+    <Ctx.Provider value={contextValue}>
       {children}
       <div className="toast-stack">
         {items.map((t) => (

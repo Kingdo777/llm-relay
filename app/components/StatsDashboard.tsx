@@ -305,17 +305,38 @@ export function StatsDashboard() {
   const [scope, setScope] = useState("overview");
   const [trendRangeMinutes, setTrendRangeMinutes] = useState<number>(24 * 60);
   const [bucketMinutes, setBucketMinutes] = useState<number>(1);
+  const requestInFlightRef = useRef(false);
+  const lastErrorRef = useRef("");
 
   const load = useCallback(async (quiet = false) => {
+    if (requestInFlightRef.current) return;
+    requestInFlightRef.current = true;
     if (!quiet) setRefreshing(true);
     try {
       const response = await fetch(`/api/stats?bucket=${bucketMinutes}`, { cache: "no-store" });
-      const json = await response.json();
+      const responseText = await response.text();
+      if (!responseText.trim()) {
+        throw new Error(`统计接口返回空响应（HTTP ${response.status}）`);
+      }
+
+      let json: { ok?: boolean; data?: DashboardStats; error?: string };
+      try {
+        json = JSON.parse(responseText) as typeof json;
+      } catch {
+        throw new Error(`统计接口返回无效或不完整的 JSON（HTTP ${response.status}）`);
+      }
       if (!response.ok || !json.ok) throw new Error(json.error || "统计加载失败");
-      setStats(json.data as DashboardStats);
+      if (!json.data) throw new Error("统计接口响应缺少 data 字段");
+      setStats(json.data);
+      lastErrorRef.current = "";
     } catch (error) {
-      show(`统计加载失败：${(error as Error).message}`, "error");
+      const message = (error as Error).message;
+      if (!quiet || lastErrorRef.current !== message) {
+        show(`统计加载失败：${message}`, "error");
+      }
+      lastErrorRef.current = message;
     } finally {
+      requestInFlightRef.current = false;
       if (!quiet) setRefreshing(false);
     }
   }, [show, bucketMinutes]);
