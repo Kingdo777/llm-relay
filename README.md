@@ -68,7 +68,7 @@ curl http://localhost:3001/v1/chat/completions \
 ## 本地运行
 
 ```bash
-npm install        # 安装依赖
+npm ci             # 严格按 package-lock.json 安装依赖
 npm run dev        # 开发模式，默认 http://localhost:3001
 npm run build      # 生产构建
 npm run start      # 生产启动

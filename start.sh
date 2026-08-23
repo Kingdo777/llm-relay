@@ -15,6 +15,19 @@ PID_FILE="$ROOT/.run.pid"
 
 mkdir -p "$LOG_DIR"
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "未找到 Node.js，请先安装 Node.js 22。" >&2
+  exit 1
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "未找到 npm，请先安装 Node.js 22（包含 npm）。" >&2
+  exit 1
+fi
+if [[ ! -f package.json || ! -f package-lock.json ]]; then
+  echo "缺少 package.json 或 package-lock.json，无法安装依赖。" >&2
+  exit 1
+fi
+
 # 已有实例运行则先执行 stop.sh 再启动
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "检测到已有实例在运行，先执行 stop.sh 进行重启..."
@@ -22,6 +35,26 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 # PID 文件残留但进程已死，清理掉
 rm -f "$PID_FILE"
+
+# 全新环境自动安装依赖；依赖清单变化时也重新执行 npm ci。
+# 哈希标记放在 node_modules 内，npm ci 重建目录后再写入。
+DEPENDENCY_STAMP="$ROOT/node_modules/.llm-relay-dependency-hash"
+DEPENDENCY_HASH="$({ sha256sum package.json package-lock.json; } | sha256sum | cut -d ' ' -f 1)"
+INSTALLED_HASH=""
+if [[ -f "$DEPENDENCY_STAMP" ]]; then
+  INSTALLED_HASH="$(cat "$DEPENDENCY_STAMP")"
+fi
+
+if [[ ! -d node_modules || "$INSTALLED_HASH" != "$DEPENDENCY_HASH" ]]; then
+  echo "首次运行或依赖清单已变化，执行 npm ci..."
+  if ! npm ci >>"$LOG_FILE" 2>&1; then
+    echo "依赖安装失败，请查看日志: $LOG_FILE" >&2
+    exit 1
+  fi
+  printf '%s\n' "$DEPENDENCY_HASH" >"$DEPENDENCY_STAMP"
+else
+  echo "依赖未变化，跳过安装。"
+fi
 
 # 支持两种模式：
 # - 默认每次启动前都会执行一次 build（避免“有时看不到更新”）
