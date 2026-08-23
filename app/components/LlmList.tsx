@@ -282,7 +282,14 @@ export function LlmList() {
         <div>
           <h1>LLM 管理</h1>
           <div className="sub">
-            Base URL 可合一或按 OpenAI / Anthropic 分离，relay 按请求协议直连对应入口
+            {relayBase ? (
+              <>
+                客户端 base 填 <b>{relayBase}</b>，model 填对应 LLM
+                的别名，token 随意。
+              </>
+            ) : (
+              "正在加载客户端地址…"
+            )}
           </div>
           <div className="sub import-export-warning">
             导出文件包含上游 Token，请妥善保管
@@ -314,87 +321,6 @@ export function LlmList() {
             + 新增 LLM
           </button>
         </div>
-      </div>
-
-      {/* 固定的对外中转地址 */}
-      <div
-        className="table-wrap"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          padding: 14,
-          marginBottom: 18,
-        }}
-      >
-        <div style={{ fontWeight: 600, fontSize: 13 }}>
-          对外中转地址（客户端用）
-        </div>
-        {relayBase ? (
-          <>
-            <div className="relay-endpoints">
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                  OpenAI:
-                </span>
-                <span className="url-cell" style={{ flex: 1 }}>
-                  <span
-                    className="url-text"
-                    title={`${relayBase}/v1/chat/completions`}
-                  >
-                    {relayBase}/v1/chat/completions
-                  </span>
-                  <CopyButton
-                    value={`${relayBase}/v1/chat/completions`}
-                    iconOnly
-                  />
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                  Responses:
-                </span>
-                <span className="url-cell" style={{ flex: 1 }}>
-                  <span
-                    className="url-text"
-                    title={`${relayBase}/v1/responses`}
-                  >
-                    {relayBase}/v1/responses
-                  </span>
-                  <CopyButton
-                    value={`${relayBase}/v1/responses`}
-                    iconOnly
-                  />
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                  Anthropic:
-                </span>
-                <span className="url-cell" style={{ flex: 1 }}>
-                  <span
-                    className="url-text"
-                    title={`${relayBase}/v1/messages`}
-                  >
-                    {relayBase}/v1/messages
-                  </span>
-                  <CopyButton
-                    value={`${relayBase}/v1/messages`}
-                    iconOnly
-                  />
-                </span>
-              </div>
-            </div>
-            <div className="hint" style={{ marginTop: 2 }}>
-              客户端 base 填 <b>{relayBase}</b>，model 填对应 LLM
-              的别名，token 随意。
-            </div>
-          </>
-        ) : (
-          <div className="muted" style={{ fontSize: 12 }}>
-            正在加载地址…
-          </div>
-        )}
       </div>
 
       {!list && <div className="muted">加载中…</div>}
