@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ChangeEvent } from "react";
 import type { LlmRow, LlmInput, ProtocolSupportResult } from "@/lib/types";
 import { LlmForm } from "./LlmForm";
 import { CopyButton } from "./CopyButton";
@@ -26,6 +27,8 @@ export function LlmList() {
   const [testResults, setTestResults] = useState<Record<number, ProtocolSupportResult>>({});
   const [expandedFailure, setExpandedFailure] = useState<Record<number, Set<ProtocolKey>>>({});
   const [pendingDelete, setPendingDelete] = useState<LlmRow | null>(null);
+  const [transferring, setTransferring] = useState<"import" | "export" | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     try {
@@ -50,6 +53,59 @@ export function LlmList() {
   function openEdit(l: LlmRow) {
     setEditing(l);
     setShowForm(true);
+  }
+
+  async function exportConfig() {
+    setTransferring("export");
+    try {
+      const resp = await fetch("/api/llms/import-export");
+      if (!resp.ok) {
+        const data = await resp.json();
+        throw new Error(data.error || "导出失败");
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `llm-relay-config-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      show(`已导出 ${list?.length ?? 0} 个 LLM 配置`, "success");
+    } catch (error) {
+      show(`导出失败：${(error as Error).message}`, "error");
+    } finally {
+      setTransferring(null);
+    }
+  }
+
+  async function importConfig(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      show("导入文件不能超过 2 MB", "error");
+      return;
+    }
+
+    setTransferring("import");
+    try {
+      const resp = await fetch("/api/llms/import-export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: await file.text(),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || "导入失败");
+      show(
+        `导入完成：新增 ${data.data.created} 个，跳过 ${data.data.skipped} 个重复配置`,
+        "success"
+      );
+      await load();
+    } catch (error) {
+      show(`导入失败：${(error as Error).message}`, "error");
+    } finally {
+      setTransferring(null);
+    }
   }
 
   async function toggle(l: LlmRow, enabled: boolean) {
@@ -212,10 +268,36 @@ export function LlmList() {
           <div className="sub">
             Base URL 可合一或按 OpenAI / Anthropic 分离，relay 按请求协议直连对应入口
           </div>
+          <div className="sub import-export-warning">
+            导出文件包含上游 Token，请妥善保管
+          </div>
         </div>
-        <button className="btn btn-primary" onClick={openCreate}>
-          + 新增 LLM
-        </button>
+        <div className="page-head-actions">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={importConfig}
+          />
+          <button
+            className="btn"
+            onClick={() => importInputRef.current?.click()}
+            disabled={transferring !== null}
+          >
+            {transferring === "import" ? "导入中…" : "导入配置"}
+          </button>
+          <button
+            className="btn"
+            onClick={exportConfig}
+            disabled={transferring !== null || list === null}
+          >
+            {transferring === "export" ? "导出中…" : "导出配置"}
+          </button>
+          <button className="btn btn-primary" onClick={openCreate}>
+            + 新增 LLM
+          </button>
+        </div>
       </div>
 
       {/* 固定的对外中转地址 */}

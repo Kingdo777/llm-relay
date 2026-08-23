@@ -426,6 +426,34 @@ export function deleteLlm(id: number): boolean {
   return info.changes > 0;
 }
 
+/** 批量导入 LLM 配置：alias 已存在时跳过，否则新增。 */
+export function importLlms(inputs: LlmInput[]): {
+  created: number;
+  skipped: number;
+} {
+  const importTransaction = db.transaction((items: LlmInput[]) => {
+    let created = 0;
+    let skipped = 0;
+    const findByAlias = db.prepare("SELECT id FROM llms WHERE alias = ?");
+
+    for (const input of items) {
+      const existing = findByAlias.get(input.alias) as
+        | { id: number }
+        | undefined;
+      if (existing) {
+        skipped += 1;
+      } else {
+        createLlm(input);
+        created += 1;
+      }
+    }
+
+    return { created, skipped };
+  });
+
+  return importTransaction(inputs);
+}
+
 // ---- Logs 操作 ----
 export interface LogInsert {
   llm_id: number | null;

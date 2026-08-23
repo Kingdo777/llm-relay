@@ -272,6 +272,16 @@ td.mono,
   font-size: 13px;
   margin-top: 2px;
 }
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.page-head .import-export-warning {
+  color: var(--warn);
+  font-size: 11px;
+  margin-top: 5px;
+}
 
 /* ---- 工具栏 ---- */
 .toolbar {
@@ -522,6 +532,15 @@ td.mono,
   font-size: 12px;
 }
 @media (max-width: 640px) {
+  .page-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .page-head-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
   .drawer { width: 100%; }
   .drawer-head { align-items: flex-start; }
   .drawer-actions { flex-wrap: wrap; justify-content: flex-end; }
