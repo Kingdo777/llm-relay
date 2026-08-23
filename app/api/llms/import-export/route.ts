@@ -100,7 +100,12 @@ export async function POST(req: Request) {
       return invalidItem(index, "enabled 必须是布尔值");
     }
 
-    const normalized = normalizeLlmInput(item as Partial<LlmInput>);
+    let normalized: ReturnType<typeof normalizeLlmInput>;
+    try {
+      normalized = normalizeLlmInput(item as Partial<LlmInput>);
+    } catch (error) {
+      return invalidItem(index, `字段格式错误：${(error as Error).message}`);
+    }
     if ("error" in normalized) {
       return invalidItem(index, normalized.error);
     }

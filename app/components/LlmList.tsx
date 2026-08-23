@@ -30,14 +30,14 @@ export function LlmList() {
   const [transferring, setTransferring] = useState<"import" | "export" | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
-  async function load() {
+  async function load(quiet = false) {
     try {
       const resp = await fetch("/api/llms");
       const data = await resp.json();
       if (data.ok) setList(data.data);
-      else show(data.error || "加载失败", "error");
+      else if (!quiet) show(data.error || "加载失败", "error");
     } catch (e) {
-      show(`加载失败：${(e as Error).message}`, "error");
+      if (!quiet) show(`加载失败：${(e as Error).message}`, "error");
     }
   }
 
@@ -94,8 +94,24 @@ export function LlmList() {
         headers: { "content-type": "application/json" },
         body: await file.text(),
       });
-      const data = await resp.json();
+      const responseText = await resp.text();
+      if (!responseText.trim()) {
+        await load(true);
+        return;
+      }
+
+      let data: {
+        ok?: boolean;
+        error?: string;
+        data?: { created: number; skipped: number };
+      };
+      try {
+        data = JSON.parse(responseText) as typeof data;
+      } catch {
+        throw new Error(`导入接口返回无效或不完整的 JSON（HTTP ${resp.status}）`);
+      }
       if (!resp.ok || !data.ok) throw new Error(data.error || "导入失败");
+      if (!data.data) throw new Error("导入接口响应缺少 data 字段");
       show(
         `导入完成：新增 ${data.data.created} 个，跳过 ${data.data.skipped} 个重复配置`,
         "success"
