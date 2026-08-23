@@ -301,6 +301,7 @@ function InteractiveLineChart({
 export function StatsDashboard() {
   const { show } = useToast();
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [scope, setScope] = useState("overview");
   const [trendRangeMinutes, setTrendRangeMinutes] = useState<number>(24 * 60);
@@ -328,9 +329,11 @@ export function StatsDashboard() {
       if (!response.ok || !json.ok) throw new Error(json.error || "统计加载失败");
       if (!json.data) throw new Error("统计接口响应缺少 data 字段");
       setStats(json.data);
+      setLoadError("");
       lastErrorRef.current = "";
     } catch (error) {
       const message = (error as Error).message;
+      setLoadError(message);
       if (!quiet || lastErrorRef.current !== message) {
         show(`统计加载失败：${message}`, "error");
       }
@@ -418,9 +421,33 @@ export function StatsDashboard() {
         </div>
       </div>
 
-      {!stats && <div className="dashboard-loading">正在汇总近 24 小时数据…</div>}
+      {!stats && !loadError && (
+        <div className="dashboard-loading">正在汇总近 24 小时数据…</div>
+      )}
 
-      {stats && activeSummary && (
+      {!stats && loadError && (
+        <div className="table-wrap">
+          <div className="empty">
+            <div className="title">统计数据加载失败</div>
+            <div>{loadError}</div>
+          </div>
+        </div>
+      )}
+
+      {stats && stats.summary.requests === 0 && (
+        <div className="table-wrap">
+          <div className="empty">
+            <div className="title">暂无运行数据</div>
+            <div>
+              {stats.models.length === 0
+                ? "还没有配置 LLM，添加或导入配置后即可开始使用。"
+                : "LLM 已配置，收到第一条中转请求后统计数据会显示在这里。"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stats && stats.summary.requests > 0 && activeSummary && (
         <>
           <div className="dashboard-scope-bar">
             <label htmlFor="stats-scope">查看范围</label>
