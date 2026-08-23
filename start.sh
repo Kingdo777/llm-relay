@@ -23,8 +23,16 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "未找到 npm，请先安装 Node.js 22（包含 npm）。" >&2
   exit 1
 fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+  echo "未找到 sha256sum，请先安装 coreutils。" >&2
+  exit 1
+fi
 if [[ ! -f package.json || ! -f package-lock.json ]]; then
   echo "缺少 package.json 或 package-lock.json，无法安装依赖。" >&2
+  exit 1
+fi
+if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
+  echo "无效端口: $PORT（应为 1-65535）" >&2
   exit 1
 fi
 
@@ -35,6 +43,19 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 # PID 文件残留但进程已死，清理掉
 rm -f "$PID_FILE"
+
+# 在耗时的依赖安装和构建前检查端口，避免最后启动时才发现冲突。
+if ! node -e '
+  const net = require("node:net");
+  const server = net.createServer();
+  server.once("error", () => process.exit(1));
+  server.listen({ host: process.argv[1], port: Number(process.argv[2]), exclusive: true }, () => {
+    server.close(() => process.exit(0));
+  });
+' "$HOST" "$PORT"; then
+  echo "端口 $PORT 已被占用，无法启动 llm-relay。" >&2
+  exit 1
+fi
 
 # 全新环境自动安装依赖；依赖清单变化时也重新执行 npm ci。
 # 哈希标记放在 node_modules 内，npm ci 重建目录后再写入。
@@ -56,14 +77,35 @@ else
   echo "依赖未变化，跳过安装。"
 fi
 
-# 支持两种模式：
-# - 默认每次启动前都会执行一次 build（避免“有时看不到更新”）
-# - 如需临时跳过构建，可设置 LLM_RELAY_SKIP_BUILD=1（用于只做快速重启）
+# 默认仅在源码、配置或依赖清单变化时重新 build。
+# LLM_RELAY_SKIP_BUILD=1 无条件跳过；LLM_RELAY_FORCE_BUILD=1 无条件重建。
 if [[ "${LLM_RELAY_SKIP_BUILD:-0}" == "1" ]]; then
   echo "检测到 LLM_RELAY_SKIP_BUILD=1，跳过构建，直接启动..."
 else
-  echo "执行构建..."
-  npm run build >>"$LOG_FILE" 2>&1
+  BUILD_STAMP="$ROOT/.next/.llm-relay-build-hash"
+  BUILD_HASH="$({
+    for path in app lib public; do
+      [[ -d "$path" ]] && find "$path" -type f -print0
+    done
+    for path in package.json package-lock.json next.config.ts tsconfig.json; do
+      [[ -f "$path" ]] && printf '%s\0' "$path"
+    done
+  } | sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f 1)"
+  BUILT_HASH=""
+  if [[ -f "$BUILD_STAMP" ]]; then
+    BUILT_HASH="$(cat "$BUILD_STAMP")"
+  fi
+
+  if [[ "${LLM_RELAY_FORCE_BUILD:-0}" != "1" && -f "$ROOT/.next/BUILD_ID" && "$BUILT_HASH" == "$BUILD_HASH" ]]; then
+    echo "源码和配置未变化，跳过构建。"
+  else
+    echo "执行构建..."
+    if ! npm run build >>"$LOG_FILE" 2>&1; then
+      echo "构建失败，请查看日志: $LOG_FILE" >&2
+      exit 1
+    fi
+    printf '%s\n' "$BUILD_HASH" >"$BUILD_STAMP"
+  fi
 fi
 
 echo "启动中... 日志: $LOG_FILE"

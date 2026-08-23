@@ -72,6 +72,7 @@ npm ci             # 严格按 package-lock.json 安装依赖
 npm run dev        # 开发模式，默认 http://localhost:3001
 npm run build      # 生产构建
 npm run start      # 生产启动
+./start.sh          # 后台启动；自动检查端口、依赖和构建产物
 ```
 
 ## 容器镜像
