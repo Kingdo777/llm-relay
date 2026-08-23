@@ -31,10 +31,10 @@ const SCHEMA_VERSION = 10;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
+  // 必须先设置等待时间；切换 WAL 本身也可能与其他进程争抢写锁。
+  db.pragma("busy_timeout = 5000");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  // 跨进程写锁等待 5s，避免构建期多 worker 并发初始化时报 SQLITE_BUSY
-  db.pragma("busy_timeout = 5000");
   ensureSchema(db);
   return db;
 }
