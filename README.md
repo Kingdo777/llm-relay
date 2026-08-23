@@ -74,6 +74,17 @@ npm run build      # 生产构建
 npm run start      # 生产启动
 ```
 
+## 容器镜像
+
+```bash
+docker build -t nvwa-llm-relay:latest .
+docker run -d --name nvwa-llm-relay -p 3001:3001 -v llm-relay-data:/data nvwa-llm-relay:latest
+```
+
+NVWA 节点安装器会把容器内固定端口 `3001` 映射到节点上的动态空闲端口。
+`GET /api/models` 仅返回已启用模型的安全元数据和 alias，不返回上游 Token；
+任务使用 alias 访问同一节点上的 relay。
+
 数据文件默认存放在项目根目录 `data/relay.db`，可通过环境变量 `DATA_DIR` 覆盖。
 
 ## 目录结构

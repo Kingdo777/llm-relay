@@ -1,0 +1,7 @@
+.git
+.next
+node_modules
+data
+.run.pid
+*.log
+inspect_tmp.cjs
