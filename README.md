@@ -22,6 +22,9 @@
   - 客户端无需自带鉴权，token 由中转站注入
   - 同格式透传：OpenAI→OpenAI、Anthropic→Anthropic
   - 完整支持 SSE 流式，边透传边记录到日志
+- **模型列表**：`GET /v1/models`
+  - OpenAI 客户端获得 OpenAI Models API 格式
+  - Anthropic SDK 通过标准 Anthropic 请求头自动获得 Anthropic Models API 格式
 
 ## 中转地址形态
 

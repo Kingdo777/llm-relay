@@ -1,29 +1,14 @@
-import { NextResponse } from "next/server";
 import { listLlms } from "@/lib/db";
+import { createModelsResponse } from "@/lib/model-list";
 
 /**
  * GET /models —— /v1/models 的兼容入口。
  *
  * 部分客户端会直接请求 /models（不拼 /v1）拉取模型列表。
- * 返回格式与 /v1/models 一致。
+ * 与 /v1/models 一样，根据请求头返回 OpenAI 或 Anthropic 格式。
  */
-export async function GET() {
-  const llms = listLlms().filter((l) => l.enabled);
-  const data = llms.map((l) => ({
-    id: l.alias,
-    object: "model",
-    created: toUnixSec(l.created_at),
-    owned_by: "llm-relay",
-  }));
-  return NextResponse.json({
-    object: "list",
-    data,
-  });
-}
-
-function toUnixSec(iso: string): number {
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? 0 : Math.floor(t / 1000);
+export async function GET(request: Request) {
+  return createModelsResponse(request, listLlms());
 }
 
 export const dynamic = "force-dynamic";
