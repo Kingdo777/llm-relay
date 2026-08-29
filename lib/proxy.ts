@@ -76,7 +76,8 @@ export async function relayRequest(
   const headers = buildUpstreamHeaders(
     backendProtocol,
     llm.token,
-    originalHeaders
+    originalHeaders,
+    llm.app_id
   );
 
   const rewritten = rewriteModel(rawBody, llm.model_name);

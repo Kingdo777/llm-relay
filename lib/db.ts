@@ -27,7 +27,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -211,6 +211,16 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
       FROM logs;
     `);
   }
+  if (fromVersion < 11) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(llms)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("app_id")) {
+      db.exec("ALTER TABLE llms ADD COLUMN app_id TEXT NOT NULL DEFAULT ''");
+    }
+  }
 }
 
 function createTables(db: Database.Database) {
@@ -223,6 +233,7 @@ function createTables(db: Database.Database) {
       openai_base_url   TEXT,
       anthropic_base_url TEXT,
       token             TEXT NOT NULL,
+      app_id            TEXT NOT NULL DEFAULT '',
       model_name        TEXT NOT NULL,
       enabled           INTEGER NOT NULL DEFAULT 1,
       created_at        TEXT NOT NULL,
@@ -288,7 +299,11 @@ function createTables(db: Database.Database) {
   `);
 }
 
-export const db: Database.Database = globalForDb.__db ?? createDb();
+const cachedDb = globalForDb.__db;
+export const db: Database.Database = cachedDb ?? createDb();
+
+// 开发模式热更新会复用连接；代码升级后仍需执行幂等 schema 迁移。
+if (cachedDb) ensureSchema(db);
 
 if (process.env.NODE_ENV !== "production") {
   globalForDb.__db = db;
@@ -328,7 +343,7 @@ const llmSelect = `SELECT id, name, alias,
   COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, ''), '') AS base_url,
   COALESCE(openai_base_url, '') AS openai_base_url,
   COALESCE(anthropic_base_url, '') AS anthropic_base_url,
-  token, model_name, enabled, created_at, updated_at,
+  token, COALESCE(app_id, '') AS app_id, model_name, enabled, created_at, updated_at,
   openai_supported, anthropic_supported, openai_responses_supported, protocols_tested_at
   FROM llms`;
 
@@ -362,8 +377,8 @@ export function createLlm(input: LlmInput): LlmRow {
   const urls = urlsFromInput(input);
   db.prepare(
     `INSERT INTO llms
-       (name, alias, url_mode, openai_base_url, anthropic_base_url, token, model_name, enabled, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, alias, url_mode, openai_base_url, anthropic_base_url, token, app_id, model_name, enabled, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.name,
     input.alias,
@@ -371,6 +386,7 @@ export function createLlm(input: LlmInput): LlmRow {
     urls.openai,
     urls.anthropic,
     input.token,
+    input.app_id?.trim() ?? "",
     input.model_name,
     input.enabled === false ? 0 : 1,
     ts,
@@ -389,13 +405,15 @@ export function updateLlm(
 	const existing = getLlm(id);
 	if (!existing) return undefined;
 	const urls = urlsFromInput(input);
+	const appId = input.app_id === undefined ? existing.app_id : input.app_id.trim();
 	const endpointChanged = urls.mode !== existing.url_mode ||
 		urls.openai !== existing.openai_base_url ||
 		urls.anthropic !== existing.anthropic_base_url ||
-		input.token !== existing.token || input.model_name !== existing.model_name;
+		input.token !== existing.token || appId !== existing.app_id ||
+		input.model_name !== existing.model_name;
 	db.prepare(
 		`UPDATE llms
-	 SET name = ?, alias = ?, url_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, model_name = ?, enabled = ?, updated_at = ?,
+	 SET name = ?, alias = ?, url_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, app_id = ?, model_name = ?, enabled = ?, updated_at = ?,
 	     openai_supported = ?, anthropic_supported = ?, openai_responses_supported = ?, protocols_tested_at = ?
 	 WHERE id = ?`
 	).run(
@@ -405,6 +423,7 @@ export function updateLlm(
     urls.openai,
     urls.anthropic,
     input.token,
+    appId,
     input.model_name,
     input.enabled === false ? 0 : 1,
 		now(),

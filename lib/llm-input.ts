@@ -29,6 +29,10 @@ export function normalizeLlmInput(
   if (body.url_mode && !["unified", "separate"].includes(body.url_mode)) {
     return { error: "Base URL 模式必须是 unified 或 separate" };
   }
+  if (body.app_id !== undefined && typeof body.app_id !== "string") {
+    return { error: "app_id 必须是字符串" };
+  }
+  const appId = body.app_id?.trim();
 
   const mode: BaseUrlMode = body.url_mode === "separate" ? "separate" : "unified";
   if (mode === "unified") {
@@ -50,6 +54,7 @@ export function normalizeLlmInput(
         openai_base_url: baseUrl,
         anthropic_base_url: baseUrl,
         enabled: body.enabled,
+        app_id: appId,
       },
     };
   }
@@ -73,6 +78,7 @@ export function normalizeLlmInput(
       openai_base_url: openaiBaseUrl,
       anthropic_base_url: anthropicBaseUrl,
       enabled: body.enabled,
+      app_id: appId,
     },
   };
 }

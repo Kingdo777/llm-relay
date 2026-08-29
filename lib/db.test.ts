@@ -24,6 +24,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     url_mode: "unified",
     base_url: "https://old.code-agent.internal",
     token: "old-token",
+    app_id: "app-v1",
     model_name: "old-model",
     enabled: false,
   };
@@ -52,6 +53,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
       ...initial,
       base_url: "https://new.code-agent.internal",
       token: "new-token",
+      app_id: "app-v2",
       model_name: "new-model",
       enabled: true,
     },
@@ -70,10 +72,22 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     initialRows.map((row) => row.id)
   );
   assert.equal(updatedRows[0].token, "new-token");
+  assert.equal(updatedRows[0].app_id, "app-v2");
   assert.equal(updatedRows[0].model_name, "new-model");
   assert.equal(updatedRows[0].openai_supported, null);
   assert.equal(updatedRows[0].anthropic_supported, null);
   assert.equal(updatedRows[0].openai_responses_supported, null);
+
+  const editedWithoutAppId = database.updateLlm(updatedRows[0].id, {
+    name: updatedRows[0].name,
+    alias: updatedRows[0].alias,
+    url_mode: updatedRows[0].url_mode,
+    base_url: updatedRows[0].base_url,
+    token: updatedRows[0].token,
+    model_name: updatedRows[0].model_name,
+    enabled: false,
+  });
+  assert.equal(editedWithoutAppId?.app_id, "app-v2");
 
   assert.throws(() =>
     database.upsertLlmsByAlias([

@@ -24,7 +24,8 @@ export async function testLlm(
   const headers = buildUpstreamHeaders(
     protocol,
     llm.token,
-    new Headers({ "content-type": "application/json" })
+    new Headers({ "content-type": "application/json" }),
+    llm.app_id
   );
   // 除连通性与鉴权外，同时验证 Agent 所需的工具 Schema。只发 hi
   // 会让部分 OpenAI 上游的伪 Anthropic 入口被误判为兼容。

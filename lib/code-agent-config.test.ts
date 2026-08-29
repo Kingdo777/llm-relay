@@ -7,6 +7,7 @@ import {
 
 const base = {
   access_token: "secret",
+  appid: "code-agent-app",
   api_base_url: "https://code-agent.internal/v1",
   models: ["module", "m2"],
 };
@@ -15,6 +16,7 @@ test("accepts empty models as a not-configured placeholder", () => {
   assert.deepEqual(
     parseCodeAgentPayload({
       access_token: "",
+      appid: "",
       api_base_url: "",
       models: [],
     }),
@@ -40,6 +42,7 @@ test("generates unified configs while preserving upstream model names", () => {
     }))
   );
   assert.equal(result.inputs[0].url_mode, "unified");
+  assert.equal(result.inputs[0].app_id, "code-agent-app");
   assert.equal(
     result.inputs[0].openai_base_url,
     "https://code-agent.internal/v1"
@@ -65,6 +68,10 @@ test("requires credentials when models are present", () => {
   assert.deepEqual(
     parseCodeAgentPayload({ ...base, api_base_url: "" }),
     { error: "models 非空时 api_base_url 不能为空" }
+  );
+  assert.deepEqual(
+    parseCodeAgentPayload({ ...base, appid: "" }),
+    { error: "models 非空时 appid 不能为空" }
   );
 });
 

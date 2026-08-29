@@ -6,6 +6,7 @@
 
     {
         "access_token": "secret",
+        "appid": "your-app-id",
         "api_base_url": "https://internal.example/v1",
         "models": ["deepseek-flash", "GLM-5.2"],
     }
@@ -22,6 +23,7 @@ def get_code_agent_config() -> dict[str, Any]:
     """在内网实现并返回 CodeAgent 配置。"""
     return {
         "access_token": "",
+        "appid": "",
         "api_base_url": "",
         "models": [],
     }

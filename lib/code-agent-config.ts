@@ -23,6 +23,9 @@ export function parseCodeAgentPayload(
   if (typeof value.access_token !== "string") {
     return { error: "access_token 必须是字符串" };
   }
+  if (typeof value.appid !== "string") {
+    return { error: "appid 必须是字符串" };
+  }
   if (typeof value.api_base_url !== "string") {
     return { error: "api_base_url 必须是字符串" };
   }
@@ -35,8 +38,10 @@ export function parseCodeAgentPayload(
   if (value.models.length === 0) return { inputs: [] };
 
   const accessToken = value.access_token.trim();
+  const appId = value.appid.trim();
   const baseUrl = value.api_base_url.trim();
   if (!accessToken) return { error: "models 非空时 access_token 不能为空" };
+  if (!appId) return { error: "models 非空时 appid 不能为空" };
   if (!baseUrl) return { error: "models 非空时 api_base_url 不能为空" };
 
   const inputs: LlmInput[] = [];
@@ -58,6 +63,7 @@ export function parseCodeAgentPayload(
         url_mode: "unified",
         base_url: baseUrl,
         token: accessToken,
+        app_id: appId,
         model_name: upstreamModel,
         enabled: true,
       });

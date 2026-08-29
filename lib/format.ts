@@ -50,13 +50,15 @@ export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
 /**
  * 根据协议构造发往后端的请求头（注入鉴权）。
  * 同格式透传：
+ *   - appId 非空（CodeAgent）   → x-auth-token + app-id
  *   - openai / openai-responses → Authorization: Bearer
  *   - anthropic                 → x-api-key + anthropic-version
  */
 export function buildUpstreamHeaders(
   protocol: Protocol,
   token: string,
-  originalHeaders: Headers
+  originalHeaders: Headers,
+  appId = ""
 ): Headers {
   const headers = new Headers();
   const skip = new Set([
@@ -65,6 +67,8 @@ export function buildUpstreamHeaders(
     "content-length",
     "authorization",
     "x-api-key",
+    "x-auth-token",
+    "app-id",
     "anthropic-version",
     "accept-encoding", // 让上游不要 gzip，便于我们直接读取
   ]);
@@ -72,7 +76,14 @@ export function buildUpstreamHeaders(
     if (!skip.has(key.toLowerCase())) headers.set(key, value);
   });
 
-  if (protocol === "anthropic") {
+  const normalizedAppId = appId.trim();
+  if (normalizedAppId) {
+    headers.set("x-auth-token", token);
+    headers.set("app-id", normalizedAppId);
+    if (protocol === "anthropic") {
+      headers.set("anthropic-version", "2023-06-01");
+    }
+  } else if (protocol === "anthropic") {
     headers.set("x-api-key", token);
     headers.set("anthropic-version", "2023-06-01");
   } else {

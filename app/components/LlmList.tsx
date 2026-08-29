@@ -258,6 +258,7 @@ export function LlmList() {
         name: `${l.name}（副本）`,
         alias,
         token: l.token,
+        app_id: l.app_id,
         model_name: l.model_name,
         url_mode: l.url_mode,
         base_url: l.base_url,

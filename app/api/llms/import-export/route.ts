@@ -3,7 +3,8 @@ import { importLlms, listLlms } from "@/lib/db";
 import { normalizeLlmInput } from "@/lib/llm-input";
 import type { LlmInput } from "@/lib/types";
 
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+const SUPPORTED_FORMAT_VERSIONS = new Set([1, FORMAT_VERSION]);
 const MAX_IMPORT_COUNT = 500;
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -17,6 +18,7 @@ export async function GET() {
     openai_base_url: llm.openai_base_url,
     anthropic_base_url: llm.anthropic_base_url,
     token: llm.token,
+    app_id: llm.app_id,
     model_name: llm.model_name,
     enabled: llm.enabled === 1,
   }));
@@ -69,7 +71,10 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  if (body.version !== FORMAT_VERSION) {
+  if (
+    typeof body.version !== "number" ||
+    !SUPPORTED_FORMAT_VERSIONS.has(body.version)
+  ) {
     return NextResponse.json(
       { ok: false, error: `不支持的配置文件版本：${String(body.version)}` },
       { status: 400 }

@@ -56,6 +56,8 @@ export interface LlmRow {
   openai_responses_supported: 0 | 1 | null;
   protocols_tested_at: string | null;
   token: string;
+  /** 非空时使用 CodeAgent 的 x-auth-token + app-id 鉴权。 */
+  app_id: string;
   model_name: string;
   enabled: 0 | 1;
   created_at: string;
@@ -72,6 +74,8 @@ export interface LlmInput {
   openai_base_url?: string;
   anthropic_base_url?: string;
   token: string;
+  /** CodeAgent 专用 app-id；省略表示使用普通协议鉴权。 */
+  app_id?: string;
   model_name: string;
   enabled?: boolean;
 }
