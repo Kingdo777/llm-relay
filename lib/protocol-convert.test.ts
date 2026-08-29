@@ -524,7 +524,7 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
         id: "chatcmpl_string",
         choices: [
           {
-            message: { role: "assistant", content: "ok" },
+            message: { role: "assistant", content: "ok", tool_calls: null },
             finish_reason: "stop",
           },
         ],
@@ -737,6 +737,7 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
           delta: {
             role: "assistant",
             reasoning_content: "provider-private reasoning",
+            tool_calls: null,
           },
           finish_reason: null,
         },

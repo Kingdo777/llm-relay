@@ -1433,7 +1433,7 @@ export function convertOpenAIChatResponseToAnthropic(
     true
   );
   if (text !== "") content.push({ type: "text", text });
-  if (message.tool_calls !== undefined) {
+  if (message.tool_calls !== undefined && message.tool_calls !== null) {
     arrayAt(
       message.tool_calls,
       OAI_TO_ANT,
@@ -2131,7 +2131,7 @@ export class OpenAIToAnthropicStreamConverter {
       );
       if (text !== "") output += this.textDelta(text);
     }
-    if (delta.tool_calls !== undefined) {
+    if (delta.tool_calls !== undefined && delta.tool_calls !== null) {
       output += this.toolCallDeltas(delta.tool_calls);
     }
     if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
