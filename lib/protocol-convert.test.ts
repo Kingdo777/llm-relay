@@ -470,37 +470,65 @@ test("Anthropic response -> OpenAI preserves text, tool calls and cache usage", 
 test("OpenAI response -> Anthropic preserves tool calls and cached token semantics", () => {
   const converted = convertOpenAIChatResponseToAnthropic({
     id: "chatcmpl_1",
-    object: "chat.completion",
+    object: "codeagent.chat.completion",
     created: 123,
     request_timestamp: "2026-08-29T12:34:56.000Z",
     created_timestamp: 1788000000,
+    provider_response_meta: { trace: "ignored" },
     model: "gpt",
     choices: [
       {
         index: 0,
         message: {
           role: "assistant",
-          content: "Calling it",
+          content: [
+            {
+              type: "text",
+              text: "Calling it",
+              provider_content_meta: "ignored",
+            },
+          ],
           reasoning_content: "provider-private reasoning",
           thinking: "provider-private thinking",
+          provider_message_meta: { ignored: true },
           tool_calls: [
             {
               id: "call_7",
-              type: "function",
-              function: { name: "lookup", arguments: '{"x":7}' },
+              type: null,
+              provider_tool_meta: "ignored",
+              function: {
+                name: "lookup",
+                arguments: '{"x":7}',
+                provider_function_meta: "ignored",
+              },
             },
           ],
         },
         finish_reason: "tool_calls",
         logprobs: null,
+        provider_choice_meta: "ignored",
       },
     ],
     usage: {
       prompt_tokens: 100,
       completion_tokens: 11,
-      total_tokens: 111,
-      prompt_tokens_details: { cached_tokens: 35, cache_write_tokens: 15 },
-      completion_tokens_details: { reasoning_tokens: 4 },
+      total_tokens: 999,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      provider_usage_meta: "ignored",
+      prompt_tokens_details: {
+        cached_tokens: 35,
+        cache_write_tokens: 15,
+        audio_tokens: null,
+        provider_prompt_meta: "ignored",
+      },
+      completion_tokens_details: {
+        reasoning_tokens: 4,
+        audio_tokens: null,
+        accepted_prediction_tokens: null,
+        rejected_prediction_tokens: null,
+        provider_completion_meta: "ignored",
+      },
     },
   });
 
@@ -732,6 +760,19 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
     openAIEvent({
       id: "chatcmpl_s",
       model: "gpt-s",
+      error: null,
+      provider_heartbeat_meta: "ignored",
+    }),
+    openAIEvent({
+      id: "chatcmpl_s",
+      model: "gpt-s",
+      choices: null,
+      provider_null_choices_meta: "ignored",
+    }),
+    openAIEvent({
+      id: "chatcmpl_s",
+      model: "gpt-s",
+      provider_event_meta: "ignored",
       choices: [
         {
           index: 0,
@@ -740,8 +781,12 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
             reasoning_content: "provider-private reasoning",
             thinking: "provider-private thinking",
             tool_calls: null,
+            annotations: null,
+            provider_delta_meta: "ignored",
           },
           finish_reason: null,
+          logprobs: null,
+          provider_choice_meta: "ignored",
         },
       ],
     }),
@@ -763,12 +808,16 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
     openAIEvent({
       id: "chatcmpl_s",
       model: "gpt-s",
-      choices: [],
       usage: {
         prompt_tokens: 50,
         completion_tokens: 2,
-        total_tokens: 52,
-        prompt_tokens_details: { cached_tokens: 20 },
+        total_tokens: 999,
+        provider_usage_meta: "ignored",
+        prompt_tokens_details: {
+          cached_tokens: 20,
+          audio_tokens: null,
+          provider_prompt_meta: "ignored",
+        },
       },
     }),
     "data: [DONE]\n\n",
@@ -830,8 +879,13 @@ test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {
               {
                 index: 0,
                 id: "call_0",
-                type: "function",
-                function: { name: "alpha", arguments: '{"x":' },
+                type: null,
+                provider_tool_meta: "ignored",
+                function: {
+                  name: "alpha",
+                  arguments: '{"x":',
+                  provider_function_meta: "ignored",
+                },
               },
               {
                 index: 1,
@@ -853,7 +907,17 @@ test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {
           index: 0,
           delta: {
             tool_calls: [
-              { index: 1, function: { arguments: "2}" } },
+              {
+                index: 1,
+                id: null,
+                type: null,
+                provider_tool_meta: "ignored",
+                function: {
+                  name: null,
+                  arguments: "2}",
+                  provider_function_meta: "ignored",
+                },
+              },
               { index: 0, function: { arguments: "1}" } },
             ],
           },
@@ -906,24 +970,61 @@ test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {
   });
 });
 
-test("OpenAI SSE rejects unknown deltas and invalid completed tool JSON", () => {
+test("OpenAI SSE ignores unknown metadata and rejects invalid completed tool JSON", () => {
   const unknown = new OpenAIToAnthropicStreamConverter();
+  assert.doesNotThrow(() =>
+    unknown.feed(
+      openAIEvent({
+        id: "x",
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            delta: { provider_secret_field: "ignored" },
+            finish_reason: null,
+          },
+        ],
+      })
+    )
+  );
+
+  const logprobs = new OpenAIToAnthropicStreamConverter();
   assert.throws(
     () =>
-      unknown.feed(
+      logprobs.feed(
         openAIEvent({
           id: "x",
           model: "m",
           choices: [
             {
               index: 0,
-              delta: { provider_secret_field: "hidden" },
+              delta: {},
+              finish_reason: null,
+              logprobs: { content: [] },
+            },
+          ],
+        })
+      ),
+    /Log probabilities/
+  );
+
+  const annotations = new OpenAIToAnthropicStreamConverter();
+  assert.throws(
+    () =>
+      annotations.feed(
+        openAIEvent({
+          id: "x",
+          model: "m",
+          choices: [
+            {
+              index: 0,
+              delta: { annotations: [{ type: "url_citation" }] },
               finish_reason: null,
             },
           ],
         })
       ),
-    ConversionError
+    /annotations delta is not representable/
   );
 
   const invalidTool = new OpenAIToAnthropicStreamConverter();
