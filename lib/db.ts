@@ -9,6 +9,7 @@ import type {
   LlmRow,
   LlmInput,
   LogRow,
+  RouteMode,
 } from "./types";
 
 // SQLite 数据文件存放在项目根目录的 data/ 下
@@ -28,7 +29,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -251,6 +252,18 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
   if (fromVersion < 13) {
     backfillCachedUsage(db);
   }
+  if (fromVersion < 14) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(llms)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("route_mode")) {
+      db.exec(
+        "ALTER TABLE llms ADD COLUMN route_mode TEXT NOT NULL DEFAULT 'off'"
+      );
+    }
+  }
 }
 
 /** 一次性修正可从现存响应可靠恢复的缓存用量与旧版 CodeAgent 双算。 */
@@ -317,6 +330,7 @@ function createTables(db: Database.Database) {
       name              TEXT NOT NULL,
       alias             TEXT NOT NULL UNIQUE,
       url_mode          TEXT NOT NULL DEFAULT 'unified',
+      route_mode        TEXT NOT NULL DEFAULT 'off',
       openai_base_url   TEXT,
       anthropic_base_url TEXT,
       token             TEXT NOT NULL,
@@ -429,6 +443,11 @@ export function getLlmByAliasIncludingDisabled(
 
 const llmSelect = `SELECT id, name, alias,
   CASE WHEN url_mode = 'separate' THEN 'separate' ELSE 'unified' END AS url_mode,
+  CASE route_mode
+    WHEN 'anthropic-to-openai' THEN 'anthropic-to-openai'
+    WHEN 'openai-to-anthropic' THEN 'openai-to-anthropic'
+    ELSE 'off'
+  END AS route_mode,
   COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, ''), '') AS base_url,
   COALESCE(openai_base_url, '') AS openai_base_url,
   COALESCE(anthropic_base_url, '') AS anthropic_base_url,
@@ -461,21 +480,42 @@ function urlsFromInput(input: LlmInput): {
   return { mode, openai: unified, anthropic: unified };
 }
 
+function routeModeFromInput(
+  input: LlmInput,
+  fallback: RouteMode = "off"
+): RouteMode {
+  return input.route_mode === "anthropic-to-openai" ||
+    input.route_mode === "openai-to-anthropic" ||
+    input.route_mode === "off"
+    ? input.route_mode
+    : fallback;
+}
+
+function assertRouteTargetAvailable(appId: string, routeMode: RouteMode): void {
+  if (appId.trim() && routeMode === "openai-to-anthropic") {
+    throw new Error("CodeAgent 没有 Anthropic 后端，不能使用 O→A 路由");
+  }
+}
+
 export function createLlm(input: LlmInput): LlmRow {
   const ts = now();
   const urls = urlsFromInput(input);
+  const routeMode = routeModeFromInput(input);
+  const appId = input.app_id?.trim() ?? "";
+  assertRouteTargetAvailable(appId, routeMode);
   db.prepare(
     `INSERT INTO llms
-       (name, alias, url_mode, openai_base_url, anthropic_base_url, token, app_id, model_name, enabled, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, alias, url_mode, route_mode, openai_base_url, anthropic_base_url, token, app_id, model_name, enabled, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.name,
     input.alias,
     urls.mode,
+    routeMode,
     urls.openai,
     urls.anthropic,
     input.token,
-    input.app_id?.trim() ?? "",
+    appId,
     input.model_name,
     input.enabled === false ? 0 : 1,
     ts,
@@ -494,21 +534,25 @@ export function updateLlm(
 	const existing = getLlm(id);
 	if (!existing) return undefined;
 	const urls = urlsFromInput(input);
+	const routeMode = routeModeFromInput(input, existing.route_mode);
 	const appId = input.app_id === undefined ? existing.app_id : input.app_id.trim();
+	assertRouteTargetAvailable(appId, routeMode);
 	const endpointChanged = urls.mode !== existing.url_mode ||
+		routeMode !== existing.route_mode ||
 		urls.openai !== existing.openai_base_url ||
 		urls.anthropic !== existing.anthropic_base_url ||
 		input.token !== existing.token || appId !== existing.app_id ||
 		input.model_name !== existing.model_name;
 	db.prepare(
 		`UPDATE llms
-	 SET name = ?, alias = ?, url_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, app_id = ?, model_name = ?, enabled = ?, updated_at = ?,
+	 SET name = ?, alias = ?, url_mode = ?, route_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, app_id = ?, model_name = ?, enabled = ?, updated_at = ?,
 	     openai_supported = ?, anthropic_supported = ?, openai_responses_supported = ?, protocols_tested_at = ?
 	 WHERE id = ?`
 	).run(
     input.name,
     input.alias,
     urls.mode,
+    routeMode,
     urls.openai,
     urls.anthropic,
     input.token,

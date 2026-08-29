@@ -5,10 +5,19 @@ import type {
   LlmInput,
   LlmRow,
   ProtocolSupportResult,
+  RouteMode,
 } from "@/lib/types";
 import { useToast } from "./Toast";
 
 type ProtocolKey = "openai" | "openaiResponses" | "anthropic";
+
+function isRoutedProtocol(routeMode: RouteMode, key: ProtocolKey): boolean {
+  if (routeMode === "anthropic-to-openai") return key === "anthropic";
+  if (routeMode === "openai-to-anthropic") {
+    return key === "openai" || key === "openaiResponses";
+  }
+  return false;
+}
 
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
 function useOrigin(): string {
@@ -33,6 +42,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
   const [name, setName] = useState("");
   const [alias, setAlias] = useState("");
   const [urlMode, setUrlMode] = useState<BaseUrlMode>("unified");
+  const [routeMode, setRouteMode] = useState<RouteMode>("off");
   const [baseUrl, setBaseUrl] = useState("");
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
   const [anthropicBaseUrl, setAnthropicBaseUrl] = useState("");
@@ -50,6 +60,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       setName(llm.name);
       setAlias(llm.alias);
       setUrlMode(llm.url_mode);
+      setRouteMode(llm.route_mode);
       setBaseUrl(llm.base_url);
       setOpenaiBaseUrl(llm.openai_base_url);
       setAnthropicBaseUrl(llm.anthropic_base_url);
@@ -60,6 +71,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       setName("");
       setAlias("");
       setUrlMode("unified");
+      setRouteMode("off");
       setBaseUrl("");
       setOpenaiBaseUrl("");
       setAnthropicBaseUrl("");
@@ -100,6 +112,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       token,
       model_name: modelName,
       url_mode: urlMode,
+      route_mode: routeMode,
       base_url: normalizedBaseURL,
       openai_base_url: normalizedOpenAIURL,
       anthropic_base_url: normalizedAnthropicURL,
@@ -131,6 +144,10 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
   async function testCurrent() {
     if (!isEdit) {
       show("请先保存后再测试", "info");
+      return;
+    }
+    if (hasUnsavedChanges) {
+      show("配置已修改，请先保存后再测试", "info");
       return;
     }
     setTesting(true);
@@ -166,6 +183,18 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
   }
 
   const relayBase = useOrigin();
+  const hasUnsavedChanges = !!llm && (
+    name !== llm.name ||
+    alias !== llm.alias ||
+    urlMode !== llm.url_mode ||
+    baseUrl !== llm.base_url ||
+    openaiBaseUrl !== llm.openai_base_url ||
+    anthropicBaseUrl !== llm.anthropic_base_url ||
+    token !== llm.token ||
+    modelName !== llm.model_name ||
+    enabled !== !!llm.enabled ||
+    routeMode !== llm.route_mode
+  );
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -308,6 +337,65 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
             </div>
           )}
 
+          <div
+            style={{
+              borderTop: `1px solid var(--border)`,
+              margin: "18px 0 14px",
+              paddingTop: 14,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>协议路由</div>
+            <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
+              将客户端协议转换后路由到上游的另一种协议；关闭时保持原协议。
+            </div>
+          </div>
+
+          <div className="field">
+            <label>路由模式</label>
+            <div
+              className="segmented route-mode-selector"
+              aria-label="协议路由模式"
+            >
+              <button
+                type="button"
+                className={routeMode === "off" ? "active" : ""}
+                onClick={() => setRouteMode("off")}
+                title="不转换协议"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                className={
+                  routeMode === "anthropic-to-openai" ? "active" : ""
+                }
+                onClick={() => setRouteMode("anthropic-to-openai")}
+                title="Anthropic 请求转换并路由到 OpenAI"
+              >
+                A → O
+              </button>
+              <button
+                type="button"
+                className={
+                  routeMode === "openai-to-anthropic" ? "active" : ""
+                }
+                onClick={() => setRouteMode("openai-to-anthropic")}
+                disabled={!!llm?.app_id.trim()}
+                title={
+                  llm?.app_id.trim()
+                    ? "CodeAgent 没有 Anthropic 后端，不能使用 O→A"
+                    : "OpenAI Chat 与 Responses 请求转换并路由到 Anthropic"
+                }
+              >
+                O → A
+              </button>
+            </div>
+            <div className="hint">
+              A → O：Anthropic 转 OpenAI；O → A：OpenAI Chat 与 Responses
+              转 Anthropic。
+            </div>
+          </div>
+
           <div className="field">
             <label>启用</label>
             <label className="toggle">
@@ -360,11 +448,17 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
             <button
               className="btn"
               onClick={() => testCurrent()}
-              disabled={testing || !isEdit}
+              disabled={testing || !isEdit || hasUnsavedChanges}
+              title={hasUnsavedChanges ? "请先保存当前修改" : "测试兼容性"}
             >
               {testing ? <span className="spinner" /> : null}
               {testing ? "正在测试三种协议…" : "🧪 测试兼容性"}
             </button>
+            {hasUnsavedChanges && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                配置已修改，请先保存后再测试
+              </span>
+            )}
             {((urlMode === "unified" && !baseUrl.trim()) ||
               (urlMode === "separate" &&
                 (!openaiBaseUrl.trim() || !anthropicBaseUrl.trim()))) && (
@@ -383,11 +477,26 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               ] as const).map(({ key, label }) => {
                 const item = testResult[key];
                 const isOpen = expandedReasons.has(key);
-                const labelText = `${label} · ${item.success ? "✓ 支持" : "✗ 不支持"}`;
+                const routed = isRoutedProtocol(llm?.route_mode ?? "off", key);
+                const labelText = `${label} · ${
+                  routed && item.success
+                    ? "路由"
+                    : routed
+                      ? "路由失败"
+                      : item.success
+                        ? "✓ 支持"
+                        : "✗ 不支持"
+                }`;
                 return (
                   <div key={key} className="protocol-test-item">
                     <span
-                      className={`test-result ${item.success ? "ok" : "fail"} protocol-inline-trigger`}
+                      className={`test-result ${
+                        routed && item.success
+                          ? "routed"
+                          : item.success
+                            ? "ok"
+                            : "fail"
+                      } protocol-inline-trigger`}
                       role={!item.success ? "button" : undefined}
                       onClick={() => {
                         if (!item.success) toggleReason(key);
@@ -395,7 +504,9 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
                       style={{ cursor: item.success ? "default" : "pointer" }}
                       title={
                         item.success
-                          ? `${label} 支持`
+                          ? routed
+                            ? `${label} 通过协议路由`
+                            : `${label} 支持`
                           : `${isOpen ? "点击收起失败原因" : "点击查看失败原因"}`
                       }
                     >

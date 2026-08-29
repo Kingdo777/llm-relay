@@ -72,7 +72,7 @@ test("uses x-auth-token and app-id for CodeAgent authentication", () => {
   assert.equal(anthropic.get("anthropic-version"), "2023-06-01");
 });
 
-test("joins provider roots with or without a trailing API version", () => {
+test("accepts provider roots with or without a trailing v1", () => {
   assert.equal(
     buildUpstreamUrl("https://yibuapi.com", "v1/chat/completions"),
     "https://yibuapi.com/v1/chat/completions",
@@ -88,10 +88,6 @@ test("joins provider roots with or without a trailing API version", () => {
   assert.equal(
     buildUpstreamUrl("https://yibuapi.com/v1", "v1/responses"),
     "https://yibuapi.com/v1/responses",
-  );
-  assert.equal(
-    buildUpstreamUrl("https://code-agent.internal/v2", "v1/messages"),
-    "https://code-agent.internal/v2/messages",
   );
 });
 

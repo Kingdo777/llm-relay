@@ -36,10 +36,19 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
   };
   const first = database.upsertLlmsByAlias([initial, secondInitial]);
   assert.deepEqual(first, { created: 2, updated: 0 });
+  assert.equal(
+    (
+      database.db.prepare("SELECT version FROM __schema").get() as {
+        version: number;
+      }
+    ).version,
+    14
+  );
 
   const initialRows = database.listLlms();
   assert.equal(initialRows.length, 2);
   assert.equal(initialRows[0].enabled, 0);
+  assert.equal(initialRows[0].route_mode, "off");
   database.updateProtocolSupport(
     initialRows[0].id,
     true,
@@ -77,6 +86,52 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
   assert.equal(updatedRows[0].openai_supported, null);
   assert.equal(updatedRows[0].anthropic_supported, null);
   assert.equal(updatedRows[0].openai_responses_supported, null);
+  assert.equal(updatedRows[0].route_mode, "off");
+
+  database.updateProtocolSupport(
+    updatedRows[0].id,
+    true,
+    true,
+    true,
+    "2026-01-02"
+  );
+  const routed = database.updateLlm(updatedRows[0].id, {
+    name: updatedRows[0].name,
+    alias: updatedRows[0].alias,
+    url_mode: updatedRows[0].url_mode,
+    route_mode: "anthropic-to-openai",
+    base_url: updatedRows[0].base_url,
+    token: updatedRows[0].token,
+    model_name: updatedRows[0].model_name,
+    enabled: true,
+  });
+  assert.equal(routed?.route_mode, "anthropic-to-openai");
+  assert.equal(routed?.openai_supported, null);
+  assert.equal(routed?.anthropic_supported, null);
+  assert.equal(routed?.openai_responses_supported, null);
+  assert.equal(routed?.protocols_tested_at, null);
+  assert.throws(
+    () =>
+      database.updateLlm(updatedRows[0].id, {
+        name: updatedRows[0].name,
+        alias: updatedRows[0].alias,
+        url_mode: updatedRows[0].url_mode,
+        route_mode: "openai-to-anthropic",
+        base_url: updatedRows[0].base_url,
+        token: updatedRows[0].token,
+        model_name: updatedRows[0].model_name,
+        enabled: true,
+      }),
+    /CodeAgent 没有 Anthropic 后端/
+  );
+
+  database.updateProtocolSupport(
+    updatedRows[0].id,
+    true,
+    true,
+    true,
+    "2026-01-03"
+  );
 
   const editedWithoutAppId = database.updateLlm(updatedRows[0].id, {
     name: updatedRows[0].name,
@@ -88,6 +143,10 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     enabled: false,
   });
   assert.equal(editedWithoutAppId?.app_id, "app-v2");
+  assert.equal(editedWithoutAppId?.route_mode, "anthropic-to-openai");
+  assert.equal(editedWithoutAppId?.openai_supported, 1);
+  assert.equal(editedWithoutAppId?.anthropic_supported, 1);
+  assert.equal(editedWithoutAppId?.openai_responses_supported, 1);
 
   const logId = database.insertLog({
     llm_id: updatedRows[0].id,

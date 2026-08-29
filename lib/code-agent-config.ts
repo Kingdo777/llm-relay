@@ -46,7 +46,6 @@ export function parseCodeAgentPayload(
 
   const inputs: LlmInput[] = [];
   const aliases = new Set<string>();
-  const protocolBaseUrls = codeAgentProtocolBaseUrls(baseUrl);
   for (let index = 0; index < value.models.length; index += 1) {
     const model = value.models[index];
     if (typeof model !== "string" || !model.trim()) {
@@ -61,9 +60,8 @@ export function parseCodeAgentPayload(
       normalized = normalizeLlmInput({
         name: displayName,
         alias,
-        url_mode: "separate",
-        openai_base_url: protocolBaseUrls.openai,
-        anthropic_base_url: protocolBaseUrls.anthropic,
+        url_mode: "unified",
+        base_url: baseUrl,
         token: accessToken,
         app_id: appId,
         model_name: upstreamModel,
@@ -83,19 +81,6 @@ export function parseCodeAgentPayload(
   }
 
   return { inputs };
-}
-
-/** CodeAgent 固定使用 OpenAI /v1 与 Anthropic /v2 两套协议根地址。 */
-function codeAgentProtocolBaseUrls(baseUrl: string): {
-  openai: string;
-  anthropic: string;
-} {
-  const withoutTrailingSlash = baseUrl.replace(/\/+$/, "");
-  const root = withoutTrailingSlash.replace(/\/v\d+$/i, "");
-  return {
-    openai: `${root}/v1`,
-    anthropic: `${root}/v2`,
-  };
 }
 
 /** 简单模型名保持可读；特殊字符改为安全 slug，并加 hash 避免 slug 冲突。 */

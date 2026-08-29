@@ -1,10 +1,15 @@
 import type { LlmRow, Protocol, TestResult } from "./types";
 import {
-  baseUrlForProtocol,
   buildUpstreamUrl,
   buildUpstreamHeaders,
   UPSTREAM_PATH,
 } from "./format";
+import { resolveRoute } from "./route-plan";
+import {
+  convertRoutedRequest,
+  convertRoutedResponse,
+  routeDescription,
+} from "./route-conversion";
 
 const PROBE_TIMEOUT_MS = 60_000;
 
@@ -18,13 +23,17 @@ export async function testLlm(
   protocol: Protocol
 ): Promise<TestResult> {
 	const start = Date.now();
-  const baseUrl = baseUrlForProtocol(llm, protocol);
-  if (!baseUrl) {
-    return { success: false, message: "该协议未配置 Base URL" };
+  const resolved = resolveRoute(llm, protocol);
+  if ("error" in resolved) {
+    return { success: false, message: resolved.error };
   }
-	const upstreamUrl = buildUpstreamUrl(baseUrl, UPSTREAM_PATH[protocol]);
+  const plan = resolved.plan;
+	const upstreamUrl = buildUpstreamUrl(
+    plan.baseUrl,
+    UPSTREAM_PATH[plan.backendProtocol]
+  );
   const headers = buildUpstreamHeaders(
-    protocol,
+    plan.backendProtocol,
     llm.token,
     new Headers({ "content-type": "application/json" }),
     llm.app_id
@@ -32,30 +41,65 @@ export async function testLlm(
   // 除连通性与鉴权外，同时验证 Agent 所需的工具 Schema。只发 hi
   // 会让部分 OpenAI 上游的伪 Anthropic 入口被误判为兼容。
   const body = buildProbeBody(llm, protocol);
+  let outgoingBody = JSON.stringify(body);
+  let conversionContext: ReturnType<typeof convertRoutedRequest>["context"] | null = null;
+  if (plan.routed) {
+    try {
+      const converted = convertRoutedRequest(outgoingBody, plan, llm);
+      outgoingBody = converted.body;
+      conversionContext = converted.context;
+    } catch (error) {
+      return {
+        success: false,
+        message: `路由请求转换失败（${routeDescription(plan)}）`,
+        detail: (error as Error).message,
+      };
+    }
+  }
 
   try {
     const resp = await fetch(upstreamUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: outgoingBody,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
 
     const duration_ms = Date.now() - start;
-    const text = await resp.text();
+    const upstreamText = await resp.text();
 
     if (resp.ok) {
+      let clientText = upstreamText;
+      if (plan.routed) {
+        try {
+          clientText = convertRoutedResponse(
+            upstreamText,
+            plan,
+            llm,
+            conversionContext!
+          );
+        } catch (error) {
+          return {
+            success: false,
+            message: `路由响应转换失败（${routeDescription(plan)}）`,
+            detail: (error as Error).message,
+            duration_ms,
+          };
+        }
+      }
       return {
         success: true,
-        message: `连接成功（HTTP ${resp.status}，${duration_ms}ms）`,
-        detail: tryExtractPreview(text),
+        message: plan.routed
+          ? `路由成功 ${routeDescription(plan)}（HTTP ${resp.status}，${duration_ms}ms）`
+          : `连接成功（HTTP ${resp.status}，${duration_ms}ms）`,
+        detail: tryExtractPreview(clientText),
         duration_ms,
       };
     }
     return {
       success: false,
-      message: `上游返回 HTTP ${resp.status}`,
-      detail: text || resp.statusText,
+      message: `上游返回 HTTP ${resp.status}${plan.routed ? `（${routeDescription(plan)}）` : ""}`,
+      detail: upstreamText || resp.statusText,
       duration_ms,
     };
   } catch (e) {
@@ -106,6 +150,7 @@ function buildProbeBody(llm: LlmRow, protocol: Protocol): Record<string, unknown
     return {
       model: llm.model_name,
       max_output_tokens: 32,
+      store: false,
       input: [{ role: "user", content: prompt }],
       tools: [{
         type: "function",

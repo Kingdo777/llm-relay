@@ -2,11 +2,35 @@ import { NextResponse } from "next/server";
 import { getLlmByAlias } from "@/lib/db";
 import {
   relayRequest,
-  pickBackend,
   parseAliasFromRequest,
   parseProtocolFromRequest,
 } from "@/lib/proxy";
 import type { Protocol } from "@/lib/types";
+import { resolveRoute } from "@/lib/route-plan";
+
+function protocolError(
+  protocol: Protocol,
+  message: string,
+  status: number
+): Response {
+  if (protocol === "anthropic") {
+    return NextResponse.json(
+      { type: "error", error: { type: "invalid_request_error", message } },
+      { status }
+    );
+  }
+  return NextResponse.json(
+    {
+      error: {
+        message,
+        type: "invalid_request_error",
+        param: null,
+        code: String(status),
+      },
+    },
+    { status }
+  );
+}
 
 /**
  * 中转处理。
@@ -16,8 +40,7 @@ import type { Protocol } from "@/lib/types";
  *   /v1/responses        → openai-responses
  *   /v1/messages          → anthropic
  *
- * OpenAI Chat / Responses 使用 OpenAI Base URL，Anthropic 使用其独立 URL。
- * 全程同格式透传，不执行协议转换。
+ * route_mode 决定保持同协议，或在 OpenAI 与 Anthropic 之间转换路由。
  */
 export async function handleRelay(
   req: Request,
@@ -44,42 +67,30 @@ export async function handleRelay(
   // 3) 从 model 找别名 → 找 LLM
   const aliasParsed = parseAliasFromRequest(rawBody);
   if ("error" in aliasParsed) {
-    return NextResponse.json(
-      { ok: false, error: aliasParsed.error },
-      { status: 400 }
-    );
+    return protocolError(clientProtocol, aliasParsed.error, 400);
   }
   const llm = getLlmByAlias(aliasParsed.alias);
   if (!llm) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `未找到别名（model）为 "${aliasParsed.alias}" 的 LLM，或该 LLM 已禁用。请检查客户端 model 填的值。`,
-      },
-      { status: 404 }
+    return protocolError(
+      clientProtocol,
+      `未找到别名（model）为 "${aliasParsed.alias}" 的 LLM，或该 LLM 已禁用。请检查客户端 model 填的值。`,
+      404
     );
   }
 
-  // 4) 严格按客户端协议选择同协议后端
-  const backend = pickBackend(llm, clientProtocol);
-  if (!backend) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `LLM「${llm.name}」没有配置 ${clientProtocol === "anthropic" ? "Anthropic" : "OpenAI"} Base URL。`,
-      },
-      { status: 422 }
-    );
+  // 4) 按 route_mode 解析目标协议与 Base URL。
+  const resolved = resolveRoute(llm, clientProtocol);
+  if ("error" in resolved) {
+    return protocolError(clientProtocol, resolved.error, 422);
   }
   // 5) 执行中转
   const result = await relayRequest(
     llm,
-    clientProtocol,
-    backend.backendProtocol,
-    backend.baseUrl,
+    resolved.plan,
     req.method,
     req.headers,
-    rawBody
+    rawBody,
+    req.signal
   );
   return result.response;
 }

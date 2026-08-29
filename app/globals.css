@@ -218,8 +218,12 @@ table {
   max-width: 230px;
 }
 .llm-model-cell {
-  width: 240px;
-  max-width: 240px;
+  width: 170px;
+  max-width: 170px;
+}
+.llm-protocol-cell {
+  width: 360px;
+  min-width: 360px;
 }
 .llm-truncated-text {
   display: block;
@@ -712,6 +716,10 @@ td.mono,
   border-color: var(--failed);
   background: var(--failed-bg);
 }
+.test-result.routed {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .test-result .title {
   font-weight: 600;
   margin-bottom: 6px;
@@ -721,6 +729,9 @@ td.mono,
 }
 .test-result.ok .title {
   color: var(--success);
+}
+.test-result.routed .title {
+  color: var(--accent);
 }
 .test-result pre {
   margin: 6px 0 0;
@@ -732,7 +743,7 @@ td.mono,
 }
 .protocol-supports {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 .protocol-failure-stack {
@@ -780,6 +791,11 @@ td.mono,
   color: var(--danger, #c93434);
   background: color-mix(in srgb, var(--danger, #c93434) 9%, transparent);
 }
+.protocol-badge.routed {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .protocol-badge.clickable-badge:hover {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
@@ -799,14 +815,17 @@ td.mono,
 }
 
 /* ---- Base URL 配置 ---- */
-.url-mode-selector {
+.url-mode-selector,
+.route-mode-selector {
   width: 100%;
 }
-.url-mode-selector button {
+.url-mode-selector button,
+.route-mode-selector button {
   flex: 1;
   padding: 8px 12px;
 }
-.url-mode-selector button.active {
+.url-mode-selector button.active,
+.route-mode-selector button.active {
   background: var(--accent);
   color: #fff;
 }

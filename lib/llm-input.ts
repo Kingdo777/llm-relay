@@ -1,4 +1,10 @@
-import type { BaseUrlMode, LlmInput } from "./types";
+import type { BaseUrlMode, LlmInput, RouteMode } from "./types";
+
+const ROUTE_MODES = new Set<RouteMode>([
+  "off",
+  "anthropic-to-openai",
+  "openai-to-anthropic",
+]);
 
 function validAlias(alias: string): boolean {
   return /^[A-Za-z0-9_.-]+$/.test(alias);
@@ -29,10 +35,19 @@ export function normalizeLlmInput(
   if (body.url_mode && !["unified", "separate"].includes(body.url_mode)) {
     return { error: "Base URL 模式必须是 unified 或 separate" };
   }
+  if (body.route_mode !== undefined && !ROUTE_MODES.has(body.route_mode)) {
+    return {
+      error:
+        "路由模式必须是 off、anthropic-to-openai 或 openai-to-anthropic",
+    };
+  }
   if (body.app_id !== undefined && typeof body.app_id !== "string") {
     return { error: "app_id 必须是字符串" };
   }
   const appId = body.app_id?.trim();
+  if (appId && body.route_mode === "openai-to-anthropic") {
+    return { error: "CodeAgent 没有 Anthropic 后端，不能使用 O→A 路由" };
+  }
 
   const mode: BaseUrlMode = body.url_mode === "separate" ? "separate" : "unified";
   if (mode === "unified") {
@@ -50,6 +65,7 @@ export function normalizeLlmInput(
         token,
         model_name: modelName,
         url_mode: mode,
+        route_mode: body.route_mode,
         base_url: baseUrl,
         openai_base_url: baseUrl,
         anthropic_base_url: baseUrl,
@@ -74,6 +90,7 @@ export function normalizeLlmInput(
       token,
       model_name: modelName,
       url_mode: mode,
+      route_mode: body.route_mode,
       base_url: openaiBaseUrl,
       openai_base_url: openaiBaseUrl,
       anthropic_base_url: anthropicBaseUrl,

@@ -43,3 +43,37 @@ test("requires both URLs in separate mode", () => {
     error: "分离模式下 OpenAI 与 Anthropic Base URL 均为必填",
   });
 });
+
+test("preserves a valid protocol route mode", () => {
+  const result = normalizeLlmInput({
+    ...base,
+    base_url: "https://api.deepseek.com",
+    route_mode: "openai-to-anthropic",
+  });
+  assert.ok("input" in result);
+  assert.equal(result.input.route_mode, "openai-to-anthropic");
+});
+
+test("rejects an unknown protocol route mode", () => {
+  const result = normalizeLlmInput({
+    ...base,
+    base_url: "https://api.deepseek.com",
+    route_mode: "sideways" as "off",
+  });
+  assert.deepEqual(result, {
+    error:
+      "路由模式必须是 off、anthropic-to-openai 或 openai-to-anthropic",
+  });
+});
+
+test("rejects CodeAgent O-to-A routing", () => {
+  const result = normalizeLlmInput({
+    ...base,
+    base_url: "https://code-agent.example/v1",
+    app_id: "app",
+    route_mode: "openai-to-anthropic",
+  });
+  assert.deepEqual(result, {
+    error: "CodeAgent 没有 Anthropic 后端，不能使用 O→A 路由",
+  });
+});

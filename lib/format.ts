@@ -40,9 +40,8 @@ export function inferProtocolFromPath(path: string): Protocol | null {
 export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
   const base = baseUrl.replace(/\/+$/, "");
   let sub = subPath.replace(/^\/+/, "");
-  // Base URL 已包含协议版本时，以它为准，避免 /v2/v1/messages。
-  if (/\/v\d+$/i.test(base) && /^v\d+\//i.test(sub)) {
-    sub = sub.replace(/^v\d+\//i, "");
+  if (base.toLowerCase().endsWith("/v1") && sub.toLowerCase().startsWith("v1/")) {
+    sub = sub.slice(3);
   }
   if (!sub) return base;
   return `${base}/${sub}`;

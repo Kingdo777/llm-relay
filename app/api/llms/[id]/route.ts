@@ -57,6 +57,12 @@ export async function PUT(req: Request, { params }: Ctx) {
         { status: 409 }
       );
     }
+    if (msg.includes("CodeAgent 没有 Anthropic 后端")) {
+      return NextResponse.json(
+        { ok: false, error: msg },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       { ok: false, error: `更新失败：${msg}` },
       { status: 500 }

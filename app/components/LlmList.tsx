@@ -1,12 +1,25 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import type { LlmRow, LlmInput, ProtocolSupportResult } from "@/lib/types";
+import type {
+  LlmRow,
+  LlmInput,
+  ProtocolSupportResult,
+  RouteMode,
+} from "@/lib/types";
 import { LlmForm } from "./LlmForm";
 import { CopyButton } from "./CopyButton";
 import { useToast } from "./Toast";
 
 type ProtocolKey = "openai" | "openaiResponses" | "anthropic";
+
+function isRoutedProtocol(routeMode: RouteMode, key: ProtocolKey): boolean {
+  if (routeMode === "anthropic-to-openai") return key === "anthropic";
+  if (routeMode === "openai-to-anthropic") {
+    return key === "openai" || key === "openaiResponses";
+  }
+  return false;
+}
 
 /** 挂载后才取 origin，避免 SSR/客户端 hydration 不一致 */
 function useOrigin(): string {
@@ -69,6 +82,8 @@ export function LlmList() {
         `CodeAgent 配置同步完成：新增 ${data.data?.created ?? 0} 个，更新 ${data.data?.updated ?? 0} 个`,
         "success"
       );
+      setTestResults({});
+      setExpandedFailure({});
       await load();
     } catch (error) {
       show(`CodeAgent 配置同步失败：${(error as Error).message}`, "error");
@@ -157,6 +172,7 @@ export function LlmList() {
           token: l.token,
           model_name: l.model_name,
           url_mode: l.url_mode,
+          route_mode: l.route_mode,
           base_url: l.base_url,
           openai_base_url: l.openai_base_url,
           anthropic_base_url: l.anthropic_base_url,
@@ -180,8 +196,18 @@ export function LlmList() {
       const result = data.data as ProtocolSupportResult;
       setTestResults((prev) => ({ ...prev, [l.id]: result }));
       setExpandedFailure((prev) => ({ ...prev, [l.id]: new Set() }));
-      const fmt = (r: { success: boolean }) => (r.success ? "支持" : "不支持");
-      show(`「${l.name}」兼容性：OpenAI ${fmt(result.openai)}，Responses ${fmt(result.openaiResponses)}，Anthropic ${fmt(result.anthropic)}`, "success");
+      const fmt = (key: ProtocolKey, r: { success: boolean }) =>
+        isRoutedProtocol(l.route_mode, key)
+          ? r.success
+            ? "路由"
+            : "路由失败"
+          : r.success
+            ? "支持"
+            : "不支持";
+      show(
+        `「${l.name}」兼容性：OpenAI ${fmt("openai", result.openai)}，Responses ${fmt("openaiResponses", result.openaiResponses)}，Anthropic ${fmt("anthropic", result.anthropic)}`,
+        "success"
+      );
       await load();
     } catch (e) {
       show(`测试失败：${(e as Error).message}`, "error");
@@ -204,21 +230,56 @@ export function LlmList() {
     l: LlmRow,
     key: ProtocolKey
   ):
-    | { label: string; cls: "supported" | "unsupported" | "unknown"; success: boolean | null; detail: string | null }
+    | { label: string; cls: "supported" | "unsupported" | "unknown" | "routed"; success: boolean | null; detail: string | null }
   {
+    const routed = isRoutedProtocol(l.route_mode, key);
+    if (!routed && key === "anthropic" && l.app_id.trim()) {
+      return {
+        label: "不支持",
+        cls: "unsupported",
+        success: false,
+        detail: "CodeAgent 不支持 Anthropic 协议。",
+      };
+    }
     const result = testResults[l.id]?.[key];
     if (result) {
       return {
-        label: result.success ? "支持" : "不支持",
-        cls: result.success ? "supported" : "unsupported",
+        label: routed
+          ? result.success
+            ? "路由"
+            : "路由失败"
+          : result.success
+            ? "支持"
+            : "不支持",
+        cls: routed && result.success
+          ? "routed"
+          : result.success
+            ? "supported"
+            : "unsupported",
         success: result.success,
         detail: result.success ? null : (result.detail || result.message || "无详细信息"),
       };
     }
     const support = isSupportedFromDb(l, key);
     return {
-      label: support === null ? "未测试" : support ? "支持" : "不支持",
-      cls: support === null ? "unknown" : support ? "supported" : "unsupported",
+      label: routed
+        ? support === false
+          ? "路由失败"
+          : "路由"
+        : support === null
+          ? "未测试"
+          : support
+            ? "支持"
+            : "不支持",
+      cls: routed
+        ? support === false
+          ? "unsupported"
+          : "routed"
+        : support === null
+          ? "unknown"
+          : support
+            ? "supported"
+            : "unsupported",
       success: support,
       detail: support === false
         ? "当前兼容性结果为“不支持”，请先点击“测试兼容性”获取最新失败原因。"
@@ -261,6 +322,7 @@ export function LlmList() {
         app_id: l.app_id,
         model_name: l.model_name,
         url_mode: l.url_mode,
+        route_mode: l.route_mode,
         base_url: l.base_url,
         openai_base_url: l.openai_base_url,
         anthropic_base_url: l.anthropic_base_url,
@@ -375,7 +437,7 @@ export function LlmList() {
                 <th>别名（model）</th>
                 <th>真实模型名</th>
                 <th>Base URL 配置</th>
-                <th>协议兼容性</th>
+                <th className="llm-protocol-cell">协议兼容性</th>
                 <th>启用</th>
                 <th>操作</th>
               </tr>
@@ -429,7 +491,7 @@ export function LlmList() {
                         )}
                       </div>
                     </td>
-                    <td>
+                    <td className="llm-protocol-cell">
                       {(() => {
                         const protocols = ([
                           { label: "OpenAI", key: "openai" as ProtocolKey },
@@ -542,6 +604,18 @@ export function LlmList() {
           llm={editing}
           onClose={() => setShowForm(false)}
           onSaved={() => {
+            if (editing) {
+              setTestResults((prev) => {
+                const next = { ...prev };
+                delete next[editing.id];
+                return next;
+              });
+              setExpandedFailure((prev) => {
+                const next = { ...prev };
+                delete next[editing.id];
+                return next;
+              });
+            }
             setShowForm(false);
             load();
           }}

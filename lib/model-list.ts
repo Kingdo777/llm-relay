@@ -1,4 +1,5 @@
 import type { LlmRow } from "./types";
+import { resolveRoute } from "./route-plan";
 
 type ListableModel = Pick<
   LlmRow,
@@ -6,8 +7,11 @@ type ListableModel = Pick<
   | "name"
   | "enabled"
   | "created_at"
+  | "route_mode"
+  | "openai_base_url"
   | "anthropic_base_url"
   | "anthropic_supported"
+  | "app_id"
 >;
 
 /**
@@ -25,7 +29,10 @@ export function isAnthropicModelsRequest(headers: Headers): boolean {
 
 export function buildOpenAiModelsPayload(models: ListableModel[]) {
   const data = models
-    .filter((model) => model.enabled === 1)
+    .filter(
+      (model) =>
+        model.enabled === 1 && "plan" in resolveRoute(model, "openai")
+    )
     .map((model) => ({
       id: model.alias,
       object: "model" as const,
@@ -44,7 +51,7 @@ export function buildAnthropicModelsPayload(models: ListableModel[]) {
     .filter(
       (model) =>
         model.enabled === 1 &&
-        model.anthropic_base_url.trim() !== "" &&
+        "plan" in resolveRoute(model, "anthropic") &&
         model.anthropic_supported !== 0,
     )
     .map((model) => ({

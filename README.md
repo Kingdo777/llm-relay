@@ -1,6 +1,6 @@
 # 🔀 LLM 中转站
 
-一个单体 LLM 请求中转代理，带配置、日志与统计看板。支持 OpenAI（Chat Completions / Responses）与 Anthropic 三种端点格式的**同格式透传**（含 SSE 流式），中转时自动注入鉴权头并覆盖模型名。
+一个单体 LLM 请求中转代理，带配置、日志与统计看板。支持 OpenAI（Chat Completions / Responses）与 Anthropic 三种端点格式的同格式透传，以及可选的双向协议转换路由（含 SSE 流式）；中转时自动注入鉴权头并覆盖模型名。
 
 ## 功能
 
@@ -13,6 +13,7 @@
   - 增删改查 LLM 配置：别名、Base URL 模式、Token、模型名、启用开关
   - 可通过运行时 Python 脚本批量添加或更新 CodeAgent 配置
   - Base URL 可选择三种协议共用的“合一”模式，或 OpenAI / Anthropic 各自输入的“分离”模式
+  - 路由模式可选关闭、Anthropic→OpenAI、OpenAI（Chat/Responses）→Anthropic
   - **兼容性测试**：一次探测 OpenAI 与 Anthropic 工具协议并持久化支持状态
   - 每条 LLM 旁显示中转地址，带**一键复制 icon**
 - **请求日志** (`/logs`)
@@ -22,8 +23,8 @@
   - 日志明细与轻量统计数据独立存储；清理日志不会删除统计看板历史
 - **核心中转**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`
   - 客户端无需自带鉴权，token 由中转站注入
-  - 同格式透传：OpenAI→OpenAI、Anthropic→Anthropic
-  - 完整支持 SSE 流式，边透传边记录到日志
+  - 默认同格式透传；可按 LLM 开启 A→O 或 O→A 格式转换路由
+  - SSE 流式转换支持文本和自定义 Function 工具调用
 - **模型列表**：`GET /v1/models`
   - OpenAI 客户端获得 OpenAI Models API 格式
   - Anthropic SDK 通过标准 Anthropic 请求头自动获得 Anthropic Models API 格式
@@ -48,10 +49,20 @@ http://<host>:<port>/v1/messages            # Anthropic 协议入口
 
 地址末尾带或不带 `/v1` 均可，relay 会避免重复拼接。
 
+协议路由按每个 LLM 独立配置：
+
+- **关闭**：保持同协议透传。
+- **A → O**：Anthropic Messages 转为 OpenAI Chat Completions，请求和响应双向转换。
+- **O → A**：OpenAI Chat 与 Responses 转为 Anthropic Messages，响应分别转回原客户端格式。
+- 支持文本、自定义 Function 工具及 SSE；无法无损映射的托管工具、会话状态、
+  Anthropic `cache_control` 等字段会明确返回错误，不会静默丢弃。
+- Responses 走 O → A 时必须显式传 `store: false`，因为 Anthropic 没有 Responses
+  服务端存储与 `previous_response_id` 语义。
+
 中转逻辑：
 1. 请求路径末段决定协议（`chat/completions`→OpenAI Chat，`responses`→OpenAI Responses，`messages`→Anthropic）
 2. 请求体里的 `model`（= 别名）决定路由到哪个 LLM
-3. 按协议选择该 LLM 的 OpenAI 或 Anthropic Base URL，拼接协议端点并注入对应鉴权头，把 model 覆盖为真实模型名后原样转发
+3. 按该 LLM 的路由模式选择目标协议与 Base URL，必要时转换请求/响应格式，再注入目标协议鉴权头并覆盖真实模型名
 
 示例（配了别名 `gpt4` 的 LLM）：
 
@@ -100,8 +111,8 @@ npm run start      # 生产启动
 ```
 
 - LLM 管理页始终显示“添加 CodeAgent”按钮；占位脚本返回空 `models` 时，点击会提示找不到配置。
-- `api_base_url` 会自动派生为 OpenAI `.../v1` 与 Anthropic `.../v2`；
-  客户端仍通过本站 `/v1/*` 路由请求。
+- CodeAgent 使用脚本返回的合一 `api_base_url`，仅支持 OpenAI Chat / Responses，
+  不支持 Anthropic。
 - CodeAgent 请求使用 `x-auth-token: access_token` 与 `app-id: appid`，不发送 Bearer 鉴权。
 - 服务端还会固定注入 `x-innercc-request-kind: main_conversation`。
 - `module` 会生成名称/别名 `CodeAgent-module`，真实模型名仍为 `module`。
@@ -157,6 +168,7 @@ scripts/
 
 - Token 明文存储于本地 SQLite，适合个人/内网使用。
 - 中转站会自动解压上游响应（去掉 `content-encoding`），便于记录与转发。
-- 流式响应（SSE）的输出会被拼接成完整文本存入日志。
+- 流式响应（SSE）会完整转发给客户端；日志仅保留前 20 万字符并标注原始长度，
+  Token 用量与错误事件采用增量解析，避免长连接持续占用内存。
 - Token 统计以供应商返回的 usage 为准；上游不返回 usage 时不做字符数估算。OpenAI Chat 流式请求会自动启用 `stream_options.include_usage`。
 - 删除 LLM 后历史日志保留（`llm_id` 置空），不影响审计。

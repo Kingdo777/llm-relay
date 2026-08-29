@@ -7,10 +7,14 @@
  * - openai-responses：OpenAI Responses（/v1/responses），Bearer 鉴权
  * - anthropic：Anthropic Messages（/v1/messages），x-api-key 鉴权
  *
- * 三者均为同格式透传，不做协议转换。
+ * 默认同格式透传；每个 LLM 可通过 route_mode 开启跨协议转换路由。
  */
 export type Protocol = "openai" | "anthropic" | "openai-responses";
 export type BaseUrlMode = "unified" | "separate";
+export type RouteMode =
+  | "off"
+  | "anthropic-to-openai"
+  | "openai-to-anthropic";
 
 export type ParsedLogBlock =
   | { type: "text"; text: string; format: "markdown" | "plain" }
@@ -47,6 +51,8 @@ export interface LlmRow {
   /** 别名 = 对外的 model 名，全局唯一；客户端把 model 填成它来选中本 LLM */
   alias: string;
   url_mode: BaseUrlMode;
+  /** 协议转换路由；off 表示按请求协议直接透传。 */
+  route_mode: RouteMode;
   /** 兼容旧调用；合一模式下等于统一 URL，分离模式下等于 OpenAI URL */
   base_url: string;
   openai_base_url: string;
@@ -69,6 +75,8 @@ export interface LlmInput {
   name: string;
   alias: string;
   url_mode: BaseUrlMode;
+  /** 省略时创建默认关闭，更新时保留现值。 */
+  route_mode?: RouteMode;
   /** 合一模式使用；保留该字段也便于旧客户端继续调用 API */
   base_url?: string;
   openai_base_url?: string;

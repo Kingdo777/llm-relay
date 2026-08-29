@@ -3,8 +3,8 @@ import { importLlms, listLlms } from "@/lib/db";
 import { normalizeLlmInput } from "@/lib/llm-input";
 import type { LlmInput } from "@/lib/types";
 
-const FORMAT_VERSION = 2;
-const SUPPORTED_FORMAT_VERSIONS = new Set([1, FORMAT_VERSION]);
+const FORMAT_VERSION = 3;
+const SUPPORTED_FORMAT_VERSIONS = new Set([1, 2, FORMAT_VERSION]);
 const MAX_IMPORT_COUNT = 500;
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -14,6 +14,7 @@ export async function GET() {
     name: llm.name,
     alias: llm.alias,
     url_mode: llm.url_mode,
+    route_mode: llm.route_mode,
     base_url: llm.base_url,
     openai_base_url: llm.openai_base_url,
     anthropic_base_url: llm.anthropic_base_url,
