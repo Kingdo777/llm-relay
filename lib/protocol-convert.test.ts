@@ -482,6 +482,7 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
           role: "assistant",
           content: "Calling it",
           reasoning_content: "provider-private reasoning",
+          thinking: "provider-private thinking",
           tool_calls: [
             {
               id: "call_7",
@@ -737,6 +738,7 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
           delta: {
             role: "assistant",
             reasoning_content: "provider-private reasoning",
+            thinking: "provider-private thinking",
             tool_calls: null,
           },
           finish_reason: null,
