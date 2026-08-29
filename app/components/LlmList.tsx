@@ -384,16 +384,27 @@ export function LlmList() {
                 const testing = testingIds.has(l.id);
                 return (
                   <tr key={l.id}>
-                    <td>{l.name}</td>
-                    <td className="mono">
-                      <span className="url-cell">
+                    <td className="llm-name-cell">
+                      <span className="llm-truncated-text" title={l.name}>
+                        {l.name}
+                      </span>
+                    </td>
+                    <td className="mono llm-alias-cell">
+                      <span className="url-cell llm-alias-value">
                         <span className="url-text" title={l.alias}>
                           {l.alias}
                         </span>
                         <CopyButton value={l.alias} iconOnly />
                       </span>
                     </td>
-                    <td className="mono">{l.model_name}</td>
+                    <td className="mono llm-model-cell">
+                      <span
+                        className="llm-truncated-text"
+                        title={l.model_name}
+                      >
+                        {l.model_name}
+                      </span>
+                    </td>
                     <td className="mono" style={{ maxWidth: 260 }}>
                       <div className="llm-url-stack">
                         {l.url_mode === "unified" ? (
