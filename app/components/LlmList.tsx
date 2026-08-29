@@ -344,6 +344,7 @@ export function LlmList() {
             className="btn"
             onClick={provisionCodeAgent}
             disabled={provisioningCodeAgent}
+            title="请确保节点已安装并授权 CodeAgent"
           >
             {provisioningCodeAgent ? <span className="spinner" /> : null}
             {provisioningCodeAgent ? "同步中…" : "+ 添加 CodeAgent"}
