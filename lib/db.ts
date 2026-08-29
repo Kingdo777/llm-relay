@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { extractRecoverableTokenUsage } from "./usage";
 import type {
   DashboardStats,
   ModelStats24h,
@@ -27,7 +28,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 13;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -79,9 +80,11 @@ function ensureSchema(db: Database.Database) {
     db.exec(`
       INSERT OR IGNORE INTO request_stats
         (request_id, llm_id, llm_alias, status, duration_ms,
-         input_tokens, output_tokens, total_tokens, first_byte_ms, created_at)
+         input_tokens, output_tokens, total_tokens, cached_input_tokens,
+         first_byte_ms, created_at)
       SELECT id, llm_id, llm_alias, status, duration_ms,
-        input_tokens, output_tokens, total_tokens, first_byte_ms, created_at
+        input_tokens, output_tokens, total_tokens, cached_input_tokens,
+        first_byte_ms, created_at
       FROM logs;
 
       UPDATE request_stats AS s
@@ -90,6 +93,7 @@ function ensureSchema(db: Database.Database) {
         input_tokens = l.input_tokens,
         output_tokens = l.output_tokens,
         total_tokens = l.total_tokens,
+        cached_input_tokens = l.cached_input_tokens,
         first_byte_ms = l.first_byte_ms
       FROM logs AS l
       WHERE l.id = s.request_id
@@ -221,6 +225,89 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
       db.exec("ALTER TABLE llms ADD COLUMN app_id TEXT NOT NULL DEFAULT ''");
     }
   }
+  if (fromVersion < 12) {
+    const logColumns = new Set(
+      (db.prepare("PRAGMA table_info(logs)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!logColumns.has("cached_input_tokens")) {
+      db.exec("ALTER TABLE logs ADD COLUMN cached_input_tokens INTEGER");
+    }
+
+    const statsColumns = new Set(
+      (
+        db.prepare("PRAGMA table_info(request_stats)").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name)
+    );
+    if (!statsColumns.has("cached_input_tokens")) {
+      db.exec(
+        "ALTER TABLE request_stats ADD COLUMN cached_input_tokens INTEGER"
+      );
+    }
+  }
+  if (fromVersion < 13) {
+    backfillCachedUsage(db);
+  }
+}
+
+/** 一次性修正可从现存响应可靠恢复的缓存用量与旧版 CodeAgent 双算。 */
+function backfillCachedUsage(db: Database.Database): void {
+  const rows = db
+    .prepare(
+      `SELECT id, output FROM logs
+       WHERE output IS NOT NULL
+         AND (instr(output, 'cache_read_input_tokens') > 0
+           OR instr(output, 'prompt_tokens_details') > 0
+           OR instr(output, 'input_tokens_details') > 0
+           OR instr(output, 'billing_usage') > 0)`
+    )
+    .iterate() as IterableIterator<{ id: number; output: string }>;
+
+  const recovered: Array<{
+    id: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cachedInputTokens: number;
+  }> = [];
+  for (const row of rows) {
+    const usage = extractRecoverableTokenUsage(row.output);
+    if (!usage || usage.cachedInputTokens === null) continue;
+    recovered.push({
+      id: row.id,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+    });
+  }
+
+  const updateLogUsage = db.prepare(
+    `UPDATE logs
+     SET input_tokens = ?, output_tokens = ?, total_tokens = ?,
+       cached_input_tokens = ?
+     WHERE id = ?`
+  );
+  const updateStatsUsage = db.prepare(
+    `UPDATE request_stats
+     SET input_tokens = ?, output_tokens = ?, total_tokens = ?,
+       cached_input_tokens = ?
+     WHERE request_id = ?`
+  );
+  for (const usage of recovered) {
+    const params = [
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.totalTokens,
+      usage.cachedInputTokens,
+      usage.id,
+    ] as const;
+    updateLogUsage.run(...params);
+    updateStatsUsage.run(...params);
+  }
 }
 
 function createTables(db: Database.Database) {
@@ -266,6 +353,7 @@ function createTables(db: Database.Database) {
       input_tokens INTEGER,
       output_tokens INTEGER,
       total_tokens INTEGER,
+      cached_input_tokens INTEGER,
       first_byte_ms INTEGER,
       created_at   TEXT NOT NULL,
       parsed_input TEXT,
@@ -286,6 +374,7 @@ function createTables(db: Database.Database) {
       input_tokens  INTEGER,
       output_tokens INTEGER,
       total_tokens  INTEGER,
+      cached_input_tokens INTEGER,
       first_byte_ms INTEGER,
       created_at    TEXT NOT NULL
     );
@@ -579,6 +668,7 @@ export function updateLog(
       | "input_tokens"
       | "output_tokens"
       | "total_tokens"
+      | "cached_input_tokens"
       | "first_byte_ms"
     >
   >
@@ -635,6 +725,12 @@ export function updateLog(
     values.push(patch.total_tokens);
     statsSets.push("total_tokens = ?");
     statsValues.push(patch.total_tokens);
+  }
+  if (patch.cached_input_tokens !== undefined) {
+    sets.push("cached_input_tokens = ?");
+    values.push(patch.cached_input_tokens);
+    statsSets.push("cached_input_tokens = ?");
+    statsValues.push(patch.cached_input_tokens);
   }
   if (patch.first_byte_ms !== undefined) {
     sets.push("first_byte_ms = ?");

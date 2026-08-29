@@ -178,6 +178,9 @@ export async function relayRequest(
               input_tokens: usage.inputTokens,
               output_tokens: usage.outputTokens,
               total_tokens: usage.totalTokens,
+              ...(usage.cachedInputTokens !== null
+                ? { cached_input_tokens: usage.cachedInputTokens }
+                : {}),
             }
           : {}),
       };
@@ -280,6 +283,9 @@ export async function relayRequest(
           input_tokens: usage.inputTokens,
           output_tokens: usage.outputTokens,
           total_tokens: usage.totalTokens,
+          ...(usage.cachedInputTokens !== null
+            ? { cached_input_tokens: usage.cachedInputTokens }
+            : {}),
         }
       : {}),
   });

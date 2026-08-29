@@ -196,6 +196,12 @@ table {
 .llm-table-wrap {
   overflow-x: auto;
 }
+.log-table-wrap {
+  overflow-x: auto;
+}
+.log-table {
+  min-width: 1180px;
+}
 .llm-table {
   min-width: 1400px;
 }

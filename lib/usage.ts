@@ -2,6 +2,8 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** null 表示上游未返回缓存明细；0 表示明确没有命中。 */
+  cachedInputTokens: number | null;
 }
 
 function tokenNumber(value: unknown): number | null {
@@ -10,19 +12,59 @@ function tokenNumber(value: unknown): number | null {
     : null;
 }
 
-function usageFromObject(value: unknown): TokenUsage | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const baseInput = tokenNumber(record.input_tokens ?? record.prompt_tokens);
-  const cacheCreation = tokenNumber(record.cache_creation_input_tokens) ?? 0;
-  const cacheRead = tokenNumber(record.cache_read_input_tokens) ?? 0;
-  const input =
-    baseInput === null && cacheCreation === 0 && cacheRead === 0
-      ? null
-      : (baseInput ?? 0) + cacheCreation + cacheRead;
-  const output = tokenNumber(record.output_tokens ?? record.completion_tokens);
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function usageFromObject(
+  value: unknown,
+  inputAlreadyIncludesCache = false
+): TokenUsage | null {
+  const record = objectRecord(value);
+  if (!record) return null;
+
+  // 部分 CodeAgent 桥接响应同时给出 Anthropic 外形和权威的 OpenAI
+  // billing_usage；外层 input_tokens 已含 cache_read，不能再次相加。
+  const billingUsage = objectRecord(record.billing_usage);
+  const openAiBillingUsage = objectRecord(billingUsage?.openai_usage);
+  if (openAiBillingUsage) {
+    const parsed = usageFromObject(openAiBillingUsage, true);
+    if (parsed) return parsed;
+  }
+
+  const promptDetails = objectRecord(record.prompt_tokens_details);
+  const inputDetails = objectRecord(record.input_tokens_details);
+  const cacheCreationRaw = tokenNumber(record.cache_creation_input_tokens);
+  const cacheReadRaw = tokenNumber(record.cache_read_input_tokens);
+  const cachedCandidates = [
+    tokenNumber(promptDetails?.cached_tokens),
+    tokenNumber(inputDetails?.cached_tokens),
+    cacheReadRaw,
+  ].filter((value): value is number => value !== null);
+  const cachedInputTokens =
+    cachedCandidates.length > 0 ? Math.max(...cachedCandidates) : null;
+
+  const baseInput = tokenNumber(record.prompt_tokens ?? record.input_tokens);
+  const output = tokenNumber(
+    "prompt_tokens" in record || inputAlreadyIncludesCache
+      ? record.completion_tokens ?? record.output_tokens
+      : record.output_tokens ?? record.completion_tokens
+  );
   const total = tokenNumber(record.total_tokens);
-  if (input === null && output === null && total === null) return null;
+  if (baseInput === null && output === null && total === null) return null;
+
+  const hasInclusiveCacheSemantics =
+    inputAlreadyIncludesCache ||
+    "prompt_tokens" in record ||
+    promptDetails !== null ||
+    inputDetails !== null;
+  const input = hasInclusiveCacheSemantics
+    ? baseInput
+    : baseInput === null && cacheCreationRaw === null && cacheReadRaw === null
+      ? null
+      : (baseInput ?? 0) + (cacheCreationRaw ?? 0) + (cacheReadRaw ?? 0);
 
   const inputTokens = input ?? Math.max(0, (total ?? 0) - (output ?? 0));
   const outputTokens = output ?? Math.max(0, (total ?? 0) - inputTokens);
@@ -30,6 +72,7 @@ function usageFromObject(value: unknown): TokenUsage | null {
     inputTokens,
     outputTokens,
     totalTokens: total ?? inputTokens + outputTokens,
+    cachedInputTokens,
   };
 }
 
@@ -53,9 +96,16 @@ function mergeUsage(current: TokenUsage | null, next: TokenUsage): TokenUsage {
   // message_start(input) 与 message_delta(output)，也不会重复累计。
   const inputTokens = Math.max(current.inputTokens, next.inputTokens);
   const outputTokens = Math.max(current.outputTokens, next.outputTokens);
+  const cachedInputTokens =
+    current.cachedInputTokens === null
+      ? next.cachedInputTokens
+      : next.cachedInputTokens === null
+        ? current.cachedInputTokens
+        : Math.max(current.cachedInputTokens, next.cachedInputTokens);
   return {
     inputTokens,
     outputTokens,
+    cachedInputTokens,
     totalTokens: Math.max(
       current.totalTokens,
       next.totalTokens,
@@ -97,4 +147,15 @@ export function extractTokenUsage(raw: string): TokenUsage | null {
     }
   }
   return usage;
+}
+
+/**
+ * 仅用于历史日志回填：正文被 clamp 截断时通常缺少最终 usage，不能用
+ * message_start 的部分值覆盖旧统计；只有未被日志层截断的响应才参与回填。
+ */
+export function extractRecoverableTokenUsage(raw: string): TokenUsage | null {
+  if (/\n…\[已截断，原始长度 \d+\]$/.test(raw)) {
+    return null;
+  }
+  return extractTokenUsage(raw);
 }

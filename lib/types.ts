@@ -103,6 +103,8 @@ export interface LogRow {
   input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
+  /** 命中上游 Prompt Cache 的输入 Token；null 表示上游未返回。 */
+  cached_input_tokens: number | null;
   /** 从收到 relay 请求到收到上游首个响应字节的时间 */
   first_byte_ms: number | null;
   created_at: string;

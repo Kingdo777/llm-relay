@@ -140,6 +140,22 @@ export function LogList() {
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
+  function cacheHitRate(row: LogRow): string | null {
+    if (
+      row.cached_input_tokens == null ||
+      row.input_tokens == null ||
+      row.input_tokens <= 0
+    ) {
+      return null;
+    }
+    return `${((row.cached_input_tokens / row.input_tokens) * 100).toFixed(1)}%`;
+  }
+
+  function cacheHitSummary(row: LogRow): string {
+    if (row.cached_input_tokens == null) return "上游未返回";
+    return `${row.cached_input_tokens}（${cacheHitRate(row) ?? "—"}）`;
+  }
+
   function statusBadge(s: string) {
     if (s === "success")
       return <span className="badge badge-success">success</span>;
@@ -236,8 +252,8 @@ export function LogList() {
       )}
 
       {rows && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap log-table-wrap">
+          <table className="log-table">
             <thead>
               <tr>
                 <th>时间</th>
@@ -249,6 +265,7 @@ export function LogList() {
                 <th>流式</th>
                 <th>HTTP</th>
                 <th>Token</th>
+                <th>缓存命中</th>
                 <th>耗时</th>
                 <th></th>
               </tr>
@@ -282,6 +299,18 @@ export function LogList() {
                   </td>
                   <td className="mono">
                     {r.total_tokens != null ? r.total_tokens : "—"}
+                  </td>
+                  <td className="mono">
+                    {r.cached_input_tokens == null ? (
+                      "—"
+                    ) : (
+                      <>
+                        {cacheHitRate(r) ?? "—"}
+                        <div className="table-subline">
+                          {r.cached_input_tokens} / {r.input_tokens ?? "—"}
+                        </div>
+                      </>
+                    )}
                   </td>
                   <td className="mono">{fmtDuration(r.duration_ms)}</td>
                   <td>
@@ -443,7 +472,7 @@ export function LogList() {
                     <div className="value mono">
                       {detail.total_tokens == null
                         ? "上游未返回 usage"
-                        : `总计 ${detail.total_tokens} · 输入 ${detail.input_tokens ?? 0} · 输出 ${detail.output_tokens ?? 0}`}
+                        : `总计 ${detail.total_tokens} · 输入 ${detail.input_tokens ?? 0} · 缓存命中 ${cacheHitSummary(detail)} · 输出 ${detail.output_tokens ?? 0}`}
                     </div>
                   </div>
 

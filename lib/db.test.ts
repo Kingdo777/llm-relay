@@ -89,6 +89,39 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
   });
   assert.equal(editedWithoutAppId?.app_id, "app-v2");
 
+  const logId = database.insertLog({
+    llm_id: updatedRows[0].id,
+    llm_alias: updatedRows[0].alias,
+    protocol: "openai",
+    base_url: updatedRows[0].base_url,
+    endpoint: "v1/chat/completions",
+    model_name: updatedRows[0].model_name,
+    input: "{}",
+    output: null,
+    status: "streaming",
+    error: null,
+    duration_ms: 0,
+    status_code: null,
+  });
+  database.updateLog(logId, {
+    status: "success",
+    input_tokens: 100,
+    output_tokens: 20,
+    total_tokens: 120,
+    cached_input_tokens: 40,
+  });
+  assert.equal(database.getLog(logId)?.cached_input_tokens, 40);
+  assert.equal(
+    (
+      database.db
+        .prepare(
+          "SELECT cached_input_tokens FROM request_stats WHERE request_id = ?"
+        )
+        .get(logId) as { cached_input_tokens: number | null }
+    ).cached_input_tokens,
+    40
+  );
+
   assert.throws(() =>
     database.upsertLlmsByAlias([
       { ...initial, alias: "must-roll-back" },
