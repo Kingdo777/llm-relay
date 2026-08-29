@@ -11,6 +11,7 @@
   - 平均/P95 完整耗时、首字节时间与输出 Token 速度
 - **LLM 管理** (`/llms`)
   - 增删改查 LLM 配置：别名、Base URL 模式、Token、模型名、启用开关
+  - 可通过运行时 Python 脚本批量添加或更新 CodeAgent 配置
   - Base URL 可选择三种协议共用的“合一”模式，或 OpenAI / Anthropic 各自输入的“分离”模式
   - **兼容性测试**：一次探测 OpenAI 与 Anthropic 工具协议并持久化支持状态
   - 每条 LLM 旁显示中转地址，带**一键复制 icon**
@@ -70,6 +71,9 @@ curl http://localhost:3001/v1/chat/completions \
 
 ## 本地运行
 
+需要 Node.js 22；CodeAgent 脚本同步还需要 `python3`（可用
+`CODE_AGENT_PYTHON` 指定其他 Python 可执行文件）。
+
 ```bash
 npm ci             # 严格按 package-lock.json 安装依赖
 npm run dev        # 开发模式，默认 http://localhost:3001
@@ -77,6 +81,30 @@ npm run build      # 生产构建
 npm run start      # 生产启动
 ./start.sh          # 后台启动；自动检查端口和构建产物
 ```
+
+## CodeAgent 配置脚本
+
+内网只需覆盖 `scripts/code_agent_config.py`。服务端在页面探测和每次点击时
+直接执行该文件，因此覆盖后无需重新构建或重启。
+
+脚本 stdout 必须只包含一个 JSON 配置对象；诊断日志请写 stderr：
+
+```json
+{
+  "access_token": "secret",
+  "api_base_url": "https://internal.example/v1",
+  "models": ["module", "m2"]
+}
+```
+
+- 占位脚本返回空 `models`，此时管理页不显示按钮。
+- Base URL 自动使用合一模式；所有模型共用同一个 Token 和 Base URL。
+- `module` 会生成名称/别名 `CodeAgent-module`，真实模型名仍为 `module`。
+- 模型 ID 含 `/`、`:` 等 alias 禁用字符时，会生成稳定的安全 alias；真实模型名不变。
+- 首次同步会新增，后续同步按生成的 alias 覆盖更新；本次未返回的旧模型不会删除。
+- 这是独立的覆盖同步流程，不改变“导入配置”遇到同 alias 时跳过的既有行为。
+- 容器部署时可将内网脚本只读挂载到
+  `/app/scripts/code_agent_config.py`，避免重建容器后丢失覆盖文件。
 
 ## 容器镜像
 
@@ -116,6 +144,8 @@ lib/
   usage.ts                  # OpenAI / Anthropic usage 提取
   test-llm.ts               # 测试连接
   types.ts
+scripts/
+  code_agent_config.py      # CodeAgent 运行时配置脚本（默认 models 为空）
 ```
 
 ## 说明

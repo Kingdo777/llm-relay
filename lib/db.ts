@@ -314,6 +314,15 @@ export function getLlmByAlias(alias: string): LlmRow | undefined {
     .get(alias) as LlmRow | undefined;
 }
 
+/** 按别名查找 LLM，包含已禁用项（用于幂等管理操作）。 */
+export function getLlmByAliasIncludingDisabled(
+  alias: string
+): LlmRow | undefined {
+  return db.prepare(`${llmSelect} WHERE alias = ?`).get(alias) as
+    | LlmRow
+    | undefined;
+}
+
 const llmSelect = `SELECT id, name, alias,
   CASE WHEN url_mode = 'separate' THEN 'separate' ELSE 'unified' END AS url_mode,
   COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, ''), '') AS base_url,
@@ -406,6 +415,41 @@ export function updateLlm(
 		id
   );
   return getLlm(id);
+}
+
+export interface UpsertLlmsByAliasResult {
+  created: number;
+  updated: number;
+}
+
+const upsertLlmsByAliasTransaction = db.transaction(
+  (inputs: readonly LlmInput[]): UpsertLlmsByAliasResult => {
+    let created = 0;
+    let updated = 0;
+
+    for (const input of inputs) {
+      const existing = getLlmByAliasIncludingDisabled(input.alias);
+      if (existing) {
+        updateLlm(existing.id, input);
+        updated += 1;
+      } else {
+        createLlm(input);
+        created += 1;
+      }
+    }
+
+    return { created, updated };
+  }
+);
+
+/**
+ * 整批按 alias 新增或更新；任意一项失败时全部回滚。
+ * IMMEDIATE 事务也会串行化并发的首次同步，避免重复创建。
+ */
+export function upsertLlmsByAlias(
+  inputs: readonly LlmInput[]
+): UpsertLlmsByAliasResult {
+  return upsertLlmsByAliasTransaction.immediate(inputs);
 }
 
 export function updateProtocolSupport(

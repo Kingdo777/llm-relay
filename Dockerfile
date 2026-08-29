@@ -13,6 +13,9 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     DATA_DIR=/data
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app ./
 RUN mkdir -p /data
 VOLUME ["/data"]
