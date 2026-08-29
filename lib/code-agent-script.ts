@@ -36,7 +36,7 @@ export class CodeAgentScriptError extends Error {
 
 /**
  * 每次调用都重新执行固定 Python 脚本，便于内网直接热替换脚本文件。
- * stdout 必须是精简配置对象；只有合法的空 models 表示功能未启用。
+ * stdout 必须是精简配置对象；合法的空 models 表示未找到配置。
  */
 export function loadCodeAgentConfigs(): Promise<LlmInput[]> {
   if (inFlightLoad) return inFlightLoad;

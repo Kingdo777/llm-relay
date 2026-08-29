@@ -11,7 +11,7 @@ const base = {
   models: ["module", "m2"],
 };
 
-test("accepts empty models as the hidden placeholder", () => {
+test("accepts empty models as a not-configured placeholder", () => {
   assert.deepEqual(
     parseCodeAgentPayload({
       access_token: "",

@@ -10,7 +10,7 @@
         "models": ["deepseek-flash", "GLM-5.2"],
     }
 
-空 models 表示未启用，管理页不会显示 CodeAgent 按钮。
+空 models 表示未配置，点击管理页按钮时会提示找不到配置。
 """
 
 import json

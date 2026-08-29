@@ -22,7 +22,6 @@ export function LlmList() {
   const [list, setList] = useState<LlmRow[] | null>(null);
   const [editing, setEditing] = useState<LlmRow | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [codeAgentVisible, setCodeAgentVisible] = useState(false);
   const [provisioningCodeAgent, setProvisioningCodeAgent] = useState(false);
 
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
@@ -43,20 +42,8 @@ export function LlmList() {
     }
   }
 
-  async function loadCodeAgentCapability() {
-    try {
-      const resp = await fetch("/api/llms/code-agent", { cache: "no-store" });
-      const data = await resp.json();
-      setCodeAgentVisible(resp.ok && data.ok && data.data?.visible === true);
-    } catch {
-      // 能力探测失败时保持默认隐藏，避免暴露未就绪的内网入口。
-      setCodeAgentVisible(false);
-    }
-  }
-
   useEffect(() => {
     load();
-    loadCodeAgentCapability();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -352,18 +339,14 @@ export function LlmList() {
           >
             {transferring === "export" ? "导出中…" : "导出配置"}
           </button>
-          {codeAgentVisible && (
-            <button
-              className="btn"
-              onClick={provisionCodeAgent}
-              disabled={provisioningCodeAgent}
-            >
-              {provisioningCodeAgent ? <span className="spinner" /> : null}
-              {provisioningCodeAgent
-                ? "同步中…"
-                : "+ 添加 / 更新 CodeAgent"}
-            </button>
-          )}
+          <button
+            className="btn"
+            onClick={provisionCodeAgent}
+            disabled={provisioningCodeAgent}
+          >
+            {provisioningCodeAgent ? <span className="spinner" /> : null}
+            {provisioningCodeAgent ? "同步中…" : "+ 添加 CodeAgent"}
+          </button>
           <button className="btn btn-primary" onClick={openCreate}>
             + 新增 LLM
           </button>

@@ -11,7 +11,7 @@ export type ParseCodeAgentConfigsResult =
 
 /**
  * 将 Python 脚本的精简对象展开为现有 LLM 配置列表。
- * 空 models 合法并表示功能隐藏；非空时统一使用 access_token/api_base_url，
+ * 空 models 合法并表示未找到配置；非空时统一使用 access_token/api_base_url，
  * 展示名和 alias 添加 CodeAgent- 前缀，真实 model_name 保持脚本原值。
  */
 export function parseCodeAgentPayload(

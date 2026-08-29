@@ -6,26 +6,6 @@ import {
 import { upsertLlmsByAlias } from "@/lib/db";
 
 /**
- * GET /api/llms/code-agent —— 运行脚本探测是否有配置。
- * 只返回可见性和数量，不返回 Token、URL 或模型配置。
- */
-export async function GET() {
-  try {
-    const configs = await loadCodeAgentConfigs();
-    return jsonNoStore({
-      ok: true,
-      data: { visible: configs.length > 0, count: configs.length },
-    });
-  } catch (error) {
-    logScriptError(error);
-    return jsonNoStore(
-      { ok: false, error: "CodeAgent 配置脚本不可用" },
-      { status: 502 }
-    );
-  }
-}
-
-/**
  * POST /api/llms/code-agent —— 执行脚本一次，全量校验后按 alias 批量新增或更新。
  * 脚本本次未返回的已有 LLM 不会被删除或禁用。
  */
@@ -43,7 +23,7 @@ export async function POST() {
 
   if (configs.length === 0) {
     return NextResponse.json(
-      { ok: false, error: "CodeAgent 配置脚本尚未提供配置" },
+      { ok: false, error: "找不到 CodeAgent 配置" },
       { status: 404 }
     );
   }
@@ -66,15 +46,6 @@ function logScriptError(error: unknown): void {
     return;
   }
   console.error("CodeAgent 配置脚本错误 [unknown]");
-}
-
-function jsonNoStore(
-  body: unknown,
-  init?: { status?: number }
-): NextResponse {
-  const response = NextResponse.json(body, init);
-  response.headers.set("cache-control", "no-store");
-  return response;
 }
 
 export const runtime = "nodejs";

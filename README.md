@@ -97,7 +97,7 @@ npm run start      # 生产启动
 }
 ```
 
-- 占位脚本返回空 `models`，此时管理页不显示按钮。
+- LLM 管理页始终显示“添加 CodeAgent”按钮；占位脚本返回空 `models` 时，点击会提示找不到配置。
 - Base URL 自动使用合一模式；所有模型共用同一个 Token 和 Base URL。
 - `module` 会生成名称/别名 `CodeAgent-module`，真实模型名仍为 `module`。
 - 模型 ID 含 `/`、`:` 等 alias 禁用字符时，会生成稳定的安全 alias；真实模型名不变。
