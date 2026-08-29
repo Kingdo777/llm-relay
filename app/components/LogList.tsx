@@ -349,14 +349,19 @@ export function LogList() {
       )}
 
       {showDeleteConfirm && (
-        <div className="overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+        <div
+          className="overlay confirm-overlay"
+          onClick={() => !deleting && setShowDeleteConfirm(false)}
+        >
           <div
-            className="drawer"
-            style={{ width: 440, height: "auto", minHeight: "auto" }}
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-logs-dialog-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="drawer-head">
-              <h2>确认清理日志</h2>
+            <div className="confirm-dialog-head">
+              <h2 id="delete-logs-dialog-title">确认清理日志</h2>
               <button
                 className="btn btn-sm"
                 disabled={deleting}
@@ -365,7 +370,7 @@ export function LogList() {
                 ✕
               </button>
             </div>
-            <div className="drawer-body">
+            <div className="confirm-dialog-body">
               将永久删除当前筛选条件下的 <b>{total}</b> 条日志。
               <div className="stats-preserved-note" style={{ marginTop: 8 }}>
                 统计数据会独立保留，不影响看板中的请求、Token 与响应速度历史。
@@ -376,7 +381,7 @@ export function LogList() {
                 </div>
               )}
             </div>
-            <div className="drawer-foot">
+            <div className="confirm-dialog-foot">
               <button className="btn" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>
                 取消
               </button>

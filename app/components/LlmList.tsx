@@ -626,14 +626,19 @@ export function LlmList() {
       )}
 
       {pendingDelete && (
-        <div className="overlay" onClick={() => setPendingDelete(null)}>
+        <div
+          className="overlay confirm-overlay"
+          onClick={() => setPendingDelete(null)}
+        >
           <div
-            className="drawer"
-            style={{ width: 420, height: "auto", minHeight: "auto" }}
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-llm-dialog-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="drawer-head">
-              <h2>确认删除</h2>
+            <div className="confirm-dialog-head">
+              <h2 id="delete-llm-dialog-title">确认删除</h2>
               <button
                 className="btn btn-sm"
                 onClick={() => setPendingDelete(null)}
@@ -641,7 +646,7 @@ export function LlmList() {
                 ✕
               </button>
             </div>
-            <div className="drawer-body">
+            <div className="confirm-dialog-body">
               确定删除 LLM「<b>{pendingDelete.name}</b>」（别名{" "}
               <b>{pendingDelete.alias}</b>）？
               <br />
@@ -649,7 +654,7 @@ export function LlmList() {
                 相关请求日志会保留（llm_id 置空），不会被一并删除。
               </span>
             </div>
-            <div className="drawer-foot">
+            <div className="confirm-dialog-foot">
               <button className="btn" onClick={() => setPendingDelete(null)}>
                 取消
               </button>
