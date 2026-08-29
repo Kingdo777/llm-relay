@@ -40,8 +40,9 @@ export function inferProtocolFromPath(path: string): Protocol | null {
 export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
   const base = baseUrl.replace(/\/+$/, "");
   let sub = subPath.replace(/^\/+/, "");
-  if (base.toLowerCase().endsWith("/v1") && sub.toLowerCase().startsWith("v1/")) {
-    sub = sub.slice(3);
+  // Base URL 已包含协议版本时，以它为准，避免 /v2/v1/messages。
+  if (/\/v\d+$/i.test(base) && /^v\d+\//i.test(sub)) {
+    sub = sub.replace(/^v\d+\//i, "");
   }
   if (!sub) return base;
   return `${base}/${sub}`;
@@ -50,7 +51,7 @@ export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
 /**
  * 根据协议构造发往后端的请求头（注入鉴权）。
  * 同格式透传：
- *   - appId 非空（CodeAgent）   → x-auth-token + app-id
+ *   - appId 非空（CodeAgent）   → x-auth-token + app-id + x-innercc-request-kind
  *   - openai / openai-responses → Authorization: Bearer
  *   - anthropic                 → x-api-key + anthropic-version
  */
@@ -69,6 +70,7 @@ export function buildUpstreamHeaders(
     "x-api-key",
     "x-auth-token",
     "app-id",
+    "x-innercc-request-kind",
     "anthropic-version",
     "accept-encoding", // 让上游不要 gzip，便于我们直接读取
   ]);
@@ -80,6 +82,7 @@ export function buildUpstreamHeaders(
   if (normalizedAppId) {
     headers.set("x-auth-token", token);
     headers.set("app-id", normalizedAppId);
+    headers.set("x-innercc-request-kind", "main_conversation");
     if (protocol === "anthropic") {
       headers.set("anthropic-version", "2023-06-01");
     }

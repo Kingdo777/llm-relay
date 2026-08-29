@@ -42,6 +42,7 @@ test("uses x-auth-token and app-id for CodeAgent authentication", () => {
       "x-api-key": "client-key",
       "x-auth-token": "client-auth-token",
       "app-id": "client-app",
+      "x-innercc-request-kind": "malicious-kind",
       "content-type": "application/json",
     }),
     "server-app"
@@ -51,6 +52,7 @@ test("uses x-auth-token and app-id for CodeAgent authentication", () => {
   assert.equal(headers.get("x-api-key"), null);
   assert.equal(headers.get("x-auth-token"), "code-agent-token");
   assert.equal(headers.get("app-id"), "server-app");
+  assert.equal(headers.get("x-innercc-request-kind"), "main_conversation");
   assert.equal(headers.get("content-type"), "application/json");
 
   const anthropic = buildUpstreamHeaders(
@@ -63,10 +65,14 @@ test("uses x-auth-token and app-id for CodeAgent authentication", () => {
   assert.equal(anthropic.get("x-api-key"), null);
   assert.equal(anthropic.get("x-auth-token"), "code-agent-token");
   assert.equal(anthropic.get("app-id"), "server-app");
+  assert.equal(
+    anthropic.get("x-innercc-request-kind"),
+    "main_conversation"
+  );
   assert.equal(anthropic.get("anthropic-version"), "2023-06-01");
 });
 
-test("accepts provider roots with or without a trailing v1", () => {
+test("joins provider roots with or without a trailing API version", () => {
   assert.equal(
     buildUpstreamUrl("https://yibuapi.com", "v1/chat/completions"),
     "https://yibuapi.com/v1/chat/completions",
@@ -82,6 +88,10 @@ test("accepts provider roots with or without a trailing v1", () => {
   assert.equal(
     buildUpstreamUrl("https://yibuapi.com/v1", "v1/responses"),
     "https://yibuapi.com/v1/responses",
+  );
+  assert.equal(
+    buildUpstreamUrl("https://code-agent.internal/v2", "v1/messages"),
+    "https://code-agent.internal/v2/messages",
   );
 });
 

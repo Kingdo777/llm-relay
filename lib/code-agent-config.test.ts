@@ -24,7 +24,7 @@ test("accepts empty models as a not-configured placeholder", () => {
   );
 });
 
-test("generates unified configs while preserving upstream model names", () => {
+test("generates split protocol URLs while preserving upstream model names", () => {
   const result = parseCodeAgentPayload(base);
 
   assert.ok("inputs" in result);
@@ -41,7 +41,7 @@ test("generates unified configs while preserving upstream model names", () => {
       model_name: model,
     }))
   );
-  assert.equal(result.inputs[0].url_mode, "unified");
+  assert.equal(result.inputs[0].url_mode, "separate");
   assert.equal(result.inputs[0].app_id, "code-agent-app");
   assert.equal(
     result.inputs[0].openai_base_url,
@@ -49,8 +49,32 @@ test("generates unified configs while preserving upstream model names", () => {
   );
   assert.equal(
     result.inputs[0].anthropic_base_url,
-    "https://code-agent.internal/v1"
+    "https://code-agent.internal/v2"
   );
+});
+
+test("normalizes CodeAgent roots ending in a version or slash", () => {
+  for (const apiBaseUrl of [
+    "https://code-agent.internal",
+    "https://code-agent.internal/",
+    "https://code-agent.internal/v1",
+    "https://code-agent.internal/v2",
+  ]) {
+    const result = parseCodeAgentPayload({
+      ...base,
+      api_base_url: apiBaseUrl,
+      models: ["module"],
+    });
+    assert.ok("inputs" in result);
+    assert.equal(
+      result.inputs[0].openai_base_url,
+      "https://code-agent.internal/v1"
+    );
+    assert.equal(
+      result.inputs[0].anthropic_base_url,
+      "https://code-agent.internal/v2"
+    );
+  }
 });
 
 test("rejects a duplicate model instead of partially syncing", () => {

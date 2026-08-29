@@ -100,8 +100,10 @@ npm run start      # 生产启动
 ```
 
 - LLM 管理页始终显示“添加 CodeAgent”按钮；占位脚本返回空 `models` 时，点击会提示找不到配置。
-- Base URL 自动使用合一模式；所有模型共用同一个 Token 和 Base URL。
+- `api_base_url` 会自动派生为 OpenAI `.../v1` 与 Anthropic `.../v2`；
+  客户端仍通过本站 `/v1/*` 路由请求。
 - CodeAgent 请求使用 `x-auth-token: access_token` 与 `app-id: appid`，不发送 Bearer 鉴权。
+- 服务端还会固定注入 `x-innercc-request-kind: main_conversation`。
 - `module` 会生成名称/别名 `CodeAgent-module`，真实模型名仍为 `module`。
 - 模型 ID 含 `/`、`:` 等 alias 禁用字符时，会生成稳定的安全 alias；真实模型名不变。
 - 首次同步会新增，后续同步按生成的 alias 覆盖更新；本次未返回的旧模型不会删除。

@@ -6,6 +6,8 @@ import {
   UPSTREAM_PATH,
 } from "./format";
 
+const PROBE_TIMEOUT_MS = 60_000;
+
 /**
  * 测试某个 LLM 配置是否可用：按指定协议发一个最简单的 hi。
  * @param llm      LLM 配置
@@ -36,7 +38,7 @@ export async function testLlm(
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
 
     const duration_ms = Date.now() - start;
@@ -62,7 +64,7 @@ export async function testLlm(
     const cause = (err as { cause?: { code?: string; name?: string } }).cause;
     let message = "请求失败";
     if (err.name === "TimeoutError" || err.name === "AbortError") {
-      message = "请求超时（30s 内未响应）";
+      message = `请求超时（${PROBE_TIMEOUT_MS / 1000}s 内未响应）`;
     } else if (
       cause?.name === "ConnectTimeoutError" ||
       cause?.code === "UND_ERR_CONNECT_TIMEOUT"
