@@ -3,7 +3,7 @@ import {
   buildUpstreamHeaders,
   buildUpstreamUrl,
   rewriteModel,
-  UPSTREAM_PATH,
+  upstreamPathForProtocol,
   inferProtocolFromPath,
   extractModel,
   requestStreamUsage,
@@ -318,14 +318,17 @@ export async function relayRequest(
   const start = Date.now();
   const { clientProtocol, backendProtocol, baseUrl } = plan;
 
-  const subPath = UPSTREAM_PATH[backendProtocol];
-  const upstreamUrl = buildUpstreamUrl(baseUrl, subPath);
+  const isCodeAgent = llm.is_code_agent === 1;
+  const subPath = upstreamPathForProtocol(backendProtocol, isCodeAgent);
+  const upstreamUrl = buildUpstreamUrl(baseUrl, subPath, {
+    codeAgent: llm.is_code_agent === 1,
+  });
   // 后端头始终按 backendProtocol 注入鉴权（同格式透传时等于 clientProtocol）
   const headers = buildUpstreamHeaders(
     backendProtocol,
     llm.token,
     originalHeaders,
-    llm.app_id
+    { appId: llm.app_id, codeAgent: isCodeAgent }
   );
 
   // 先写一条 streaming 状态的日志占位（无论成败都留痕）
@@ -380,6 +383,12 @@ export async function relayRequest(
     }
   }
   const outBody = requestStreamUsage(convertedRequestBody, backendProtocol);
+  const backendRequestedStream = requestBodyStreams(outBody);
+  if (plan.routed && !backendRequestedStream) {
+    // 路由后以目标协议的 body 为准；不要让客户端遗留的 Accept 诱导兼容
+    // 上游在 stream=false 时仍返回 SSE。
+    headers.set("accept", "application/json");
+  }
 
   let response: Response;
   try {
@@ -441,7 +450,12 @@ export async function relayRequest(
       return;
     respHeaders.set(k, v);
   });
-  if (isSSE && response.body && response.ok) {
+  if (
+    isSSE &&
+    response.body &&
+    response.ok &&
+    (!plan.routed || backendRequestedStream)
+  ) {
     const reader = response.body.getReader();
     const rawDecoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -621,6 +635,9 @@ export async function relayRequest(
   let clientText = bufText;
   if (plan.routed) {
     try {
+      if (response.ok && isSSE && !backendRequestedStream) {
+        throw new Error("上游忽略 stream=false 并返回 SSE，无法作为非流式 JSON 转换");
+      }
       clientText = response.ok
         ? convertRoutedResponse(bufText, plan, llm, conversionContext!)
         : convertRoutedError(bufText, clientProtocol, status);
@@ -695,6 +712,15 @@ export async function relayRequest(
     }),
     logId,
   };
+}
+
+function requestBodyStreams(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    return parsed.stream === true;
+  } catch {
+    return false;
+  }
 }
 
 /** 解析请求路径，返回客户端协议 */

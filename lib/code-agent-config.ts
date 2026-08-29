@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeCodeAgentBaseUrl } from "./format";
 import { normalizeLlmInput } from "./llm-input";
 import type { LlmInput } from "./types";
 
@@ -39,10 +40,18 @@ export function parseCodeAgentPayload(
 
   const accessToken = value.access_token.trim();
   const appId = value.appid.trim();
-  const baseUrl = value.api_base_url.trim();
+  const rawBaseUrl = value.api_base_url.trim();
   if (!accessToken) return { error: "models 非空时 access_token 不能为空" };
   if (!appId) return { error: "models 非空时 appid 不能为空" };
-  if (!baseUrl) return { error: "models 非空时 api_base_url 不能为空" };
+  if (!rawBaseUrl) return { error: "models 非空时 api_base_url 不能为空" };
+  let baseUrl: string;
+  try {
+    baseUrl = normalizeCodeAgentBaseUrl(rawBaseUrl);
+  } catch {
+    return {
+      error: "models 非空时 api_base_url 必须是合法的 http:// 或 https:// 地址",
+    };
+  }
 
   const inputs: LlmInput[] = [];
   const aliases = new Set<string>();
@@ -61,9 +70,11 @@ export function parseCodeAgentPayload(
         name: displayName,
         alias,
         url_mode: "unified",
+        route_mode: "anthropic-to-openai",
         base_url: baseUrl,
         token: accessToken,
         app_id: appId,
+        is_code_agent: true,
         model_name: upstreamModel,
         enabled: true,
       });

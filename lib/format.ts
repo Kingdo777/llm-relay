@@ -7,6 +7,15 @@ export const UPSTREAM_PATH: Record<Protocol, string> = {
   anthropic: "v1/messages",
 };
 
+/** 返回实际上游路径；CodeAgent 对外虽由 /v1 接入，上游固定使用 /v2。 */
+export function upstreamPathForProtocol(
+  protocol: Protocol,
+  isCodeAgent = false
+): string {
+  const path = UPSTREAM_PATH[protocol];
+  return isCodeAgent ? path.replace(/^v1\//, "v2/") : path;
+}
+
 /** OpenAI Chat / Responses 共用 OpenAI URL，Anthropic 使用独立 URL。 */
 export function baseUrlForProtocol(llm: LlmRow, protocol: Protocol): string {
   return protocol === "anthropic"
@@ -36,8 +45,43 @@ export function inferProtocolFromPath(path: string): Protocol | null {
   return null;
 }
 
+export interface UpstreamUrlOptions {
+  /** CodeAgent 的上游 API 固定使用 v2；客户端入口仍保持 v1。 */
+  codeAgent?: boolean;
+}
+
+/**
+ * 将 CodeAgent Base URL 统一到 v2。
+ *
+ * 脚本或历史配置可能提供根地址、/v1、/v2，甚至旧错误拼接的 /v2/v1；
+ * 存储和发送前都归一成单一 /v2，避免再次产生 /v2/v1/...。
+ */
+export function normalizeCodeAgentBaseUrl(baseUrl: string): string {
+  const url = new URL(baseUrl.trim());
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("CodeAgent Base URL 必须使用 http:// 或 https://");
+  }
+  const path = url.pathname
+    .replace(/\/+$/, "")
+    .replace(/(?:\/v[12])+$/i, "");
+  url.pathname = `${path}/v2`;
+  // fragment 不会发送给服务端，避免把无效片段保存为 API Base URL。
+  url.hash = "";
+  return url.toString();
+}
+
 /** 构造发往后端的完整 URL */
-export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
+export function buildUpstreamUrl(
+  baseUrl: string,
+  subPath: string,
+  options: UpstreamUrlOptions = {}
+): string {
+  if (options.codeAgent) {
+    const base = new URL(normalizeCodeAgentBaseUrl(baseUrl));
+    const sub = subPath.replace(/^\/+/, "").replace(/^v[12]\//i, "");
+    if (sub) base.pathname = `${base.pathname.replace(/\/+$/, "")}/${sub}`;
+    return base.toString();
+  }
   const base = baseUrl.replace(/\/+$/, "");
   let sub = subPath.replace(/^\/+/, "");
   if (base.toLowerCase().endsWith("/v1") && sub.toLowerCase().startsWith("v1/")) {
@@ -50,15 +94,20 @@ export function buildUpstreamUrl(baseUrl: string, subPath: string): string {
 /**
  * 根据协议构造发往后端的请求头（注入鉴权）。
  * 同格式透传：
- *   - appId 非空（CodeAgent）   → x-auth-token + app-id + x-innercc-request-kind
+ *   - codeAgent=true            → x-auth-token + app-id + x-innercc-request-kind
  *   - openai / openai-responses → Authorization: Bearer
  *   - anthropic                 → x-api-key + anthropic-version
  */
+export interface UpstreamAuthOptions {
+  appId?: string;
+  codeAgent?: boolean;
+}
+
 export function buildUpstreamHeaders(
   protocol: Protocol,
   token: string,
   originalHeaders: Headers,
-  appId = ""
+  options: UpstreamAuthOptions = {}
 ): Headers {
   const headers = new Headers();
   const skip = new Set([
@@ -77,8 +126,11 @@ export function buildUpstreamHeaders(
     if (!skip.has(key.toLowerCase())) headers.set(key, value);
   });
 
-  const normalizedAppId = appId.trim();
-  if (normalizedAppId) {
+  const normalizedAppId = options.appId?.trim() ?? "";
+  if (options.codeAgent) {
+    if (!normalizedAppId) {
+      throw new Error("CodeAgent 配置缺少 app_id");
+    }
     headers.set("x-auth-token", token);
     headers.set("app-id", normalizedAppId);
     headers.set("x-innercc-request-kind", "main_conversation");

@@ -24,6 +24,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     url_mode: "unified",
     base_url: "https://old.code-agent.internal",
     token: "old-token",
+    is_code_agent: true,
     app_id: "app-v1",
     model_name: "old-model",
     enabled: false,
@@ -42,13 +43,14 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
         version: number;
       }
     ).version,
-    14
+    15
   );
 
   const initialRows = database.listLlms();
   assert.equal(initialRows.length, 2);
   assert.equal(initialRows[0].enabled, 0);
-  assert.equal(initialRows[0].route_mode, "off");
+  assert.equal(initialRows[0].is_code_agent, 1);
+  assert.equal(initialRows[0].route_mode, "anthropic-to-openai");
   database.updateProtocolSupport(
     initialRows[0].id,
     true,
@@ -81,12 +83,13 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     initialRows.map((row) => row.id)
   );
   assert.equal(updatedRows[0].token, "new-token");
+  assert.equal(updatedRows[0].is_code_agent, 1);
   assert.equal(updatedRows[0].app_id, "app-v2");
   assert.equal(updatedRows[0].model_name, "new-model");
   assert.equal(updatedRows[0].openai_supported, null);
   assert.equal(updatedRows[0].anthropic_supported, null);
   assert.equal(updatedRows[0].openai_responses_supported, null);
-  assert.equal(updatedRows[0].route_mode, "off");
+  assert.equal(updatedRows[0].route_mode, "anthropic-to-openai");
 
   database.updateProtocolSupport(
     updatedRows[0].id,
@@ -99,13 +102,13 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     name: updatedRows[0].name,
     alias: updatedRows[0].alias,
     url_mode: updatedRows[0].url_mode,
-    route_mode: "anthropic-to-openai",
+    route_mode: "off",
     base_url: updatedRows[0].base_url,
     token: updatedRows[0].token,
     model_name: updatedRows[0].model_name,
     enabled: true,
   });
-  assert.equal(routed?.route_mode, "anthropic-to-openai");
+  assert.equal(routed?.route_mode, "off");
   assert.equal(routed?.openai_supported, null);
   assert.equal(routed?.anthropic_supported, null);
   assert.equal(routed?.openai_responses_supported, null);
@@ -143,10 +146,54 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     enabled: false,
   });
   assert.equal(editedWithoutAppId?.app_id, "app-v2");
-  assert.equal(editedWithoutAppId?.route_mode, "anthropic-to-openai");
+  assert.equal(editedWithoutAppId?.is_code_agent, 1);
+  assert.equal(editedWithoutAppId?.route_mode, "off");
   assert.equal(editedWithoutAppId?.openai_supported, 1);
   assert.equal(editedWithoutAppId?.anthropic_supported, 1);
   assert.equal(editedWithoutAppId?.openai_responses_supported, 1);
+
+  const appIdIsNotAProviderMarker = database.createLlm({
+    name: "Ordinary provider",
+    alias: "ordinary-with-app-id",
+    url_mode: "unified",
+    route_mode: "openai-to-anthropic",
+    base_url: "https://ordinary.example",
+    token: "token",
+    app_id: "metadata-only",
+    model_name: "ordinary-model",
+  });
+  assert.equal(appIdIsNotAProviderMarker.is_code_agent, 0);
+  assert.equal(appIdIsNotAProviderMarker.route_mode, "openai-to-anthropic");
+
+  assert.throws(
+    () =>
+      database.createLlm({
+        name: "Explicit CodeAgent",
+        alias: "explicit-code-agent",
+        url_mode: "unified",
+        route_mode: "openai-to-anthropic",
+        base_url: "https://code-agent.example",
+        token: "token",
+        is_code_agent: true,
+        app_id: "app",
+        model_name: "code-agent-model",
+      }),
+    /CodeAgent 没有 Anthropic 后端/
+  );
+
+  assert.throws(
+    () =>
+      database.createLlm({
+        name: "CodeAgent without app id",
+        alias: "code-agent-without-app-id",
+        url_mode: "unified",
+        base_url: "https://code-agent.example",
+        token: "token",
+        is_code_agent: true,
+        model_name: "code-agent-model",
+      }),
+    /CodeAgent 配置必须填写 app_id/
+  );
 
   const logId = database.insertLog({
     llm_id: updatedRows[0].id,
@@ -193,7 +240,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
       },
     ])
   );
-  assert.equal(database.listLlms().length, 2);
+  assert.equal(database.listLlms().length, 3);
   assert.equal(
     database.getLlmByAliasIncludingDisabled("must-roll-back"),
     undefined

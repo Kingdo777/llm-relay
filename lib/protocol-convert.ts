@@ -610,6 +610,9 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       integer: true,
       positive: true,
     }),
+    // Anthropic 与 OpenAI 都把省略 stream 解释为非流式。显式发送 false，
+    // 避免部分兼容上游在字段缺失时错误地默认返回 SSE。
+    stream: false,
   };
   for (const key of ["temperature", "top_p"] as const) {
     if (body[key] !== undefined) {

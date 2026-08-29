@@ -7,7 +7,7 @@
     {
         "access_token": "secret",
         "appid": "your-app-id",
-        "api_base_url": "https://internal.example/v1",
+        "api_base_url": "https://internal.example/v2",
         "models": ["deepseek-flash", "GLM-5.2"],
     }
 

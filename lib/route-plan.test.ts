@@ -8,6 +8,7 @@ const base = {
   openai_base_url: "https://openai.example",
   anthropic_base_url: "https://anthropic.example",
   app_id: "",
+  is_code_agent: 0,
 } as LlmRow;
 
 const expected: Record<RouteMode, Record<Protocol, Protocol>> = {
@@ -47,7 +48,7 @@ test("resolves the complete route mode matrix", () => {
 });
 
 test("allows CodeAgent A-to-O and rejects Anthropic backends", () => {
-  const codeAgent = { ...base, app_id: "app" };
+  const codeAgent = { ...base, app_id: "app", is_code_agent: 1 as const };
   const routed = resolveRoute(
     { ...codeAgent, route_mode: "anthropic-to-openai" },
     "anthropic"
@@ -62,6 +63,16 @@ test("allows CodeAgent A-to-O and rejects Anthropic backends", () => {
     "openai"
   );
   assert.ok("error" in reverse);
+
+  const ordinaryWithAppIdRow = {
+    ...base,
+    app_id: "metadata-only",
+    is_code_agent: 0 as const,
+    route_mode: "openai-to-anthropic" as const,
+  } as LlmRow;
+  const ordinaryWithAppId = resolveRoute(ordinaryWithAppIdRow, "openai");
+  assert.ok("plan" in ordinaryWithAppId);
+  assert.equal(ordinaryWithAppId.plan.backendProtocol, "anthropic");
 });
 
 test("requires the selected target Base URL", () => {

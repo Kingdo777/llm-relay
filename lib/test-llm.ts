@@ -2,7 +2,7 @@ import type { LlmRow, Protocol, TestResult } from "./types";
 import {
   buildUpstreamUrl,
   buildUpstreamHeaders,
-  UPSTREAM_PATH,
+  upstreamPathForProtocol,
 } from "./format";
 import { resolveRoute } from "./route-plan";
 import {
@@ -30,13 +30,23 @@ export async function testLlm(
   const plan = resolved.plan;
 	const upstreamUrl = buildUpstreamUrl(
     plan.baseUrl,
-    UPSTREAM_PATH[plan.backendProtocol]
+    upstreamPathForProtocol(
+      plan.backendProtocol,
+      llm.is_code_agent === 1
+    ),
+    { codeAgent: llm.is_code_agent === 1 }
   );
   const headers = buildUpstreamHeaders(
     plan.backendProtocol,
     llm.token,
-    new Headers({ "content-type": "application/json" }),
-    llm.app_id
+    new Headers({
+      "content-type": "application/json",
+      accept: "application/json",
+    }),
+    {
+      appId: llm.app_id,
+      codeAgent: llm.is_code_agent === 1,
+    }
   );
   // 除连通性与鉴权外，同时验证 Agent 所需的工具 Schema。只发 hi
   // 会让部分 OpenAI 上游的伪 Anthropic 入口被误判为兼容。
@@ -82,7 +92,11 @@ export async function testLlm(
           return {
             success: false,
             message: `路由响应转换失败（${routeDescription(plan)}）`,
-            detail: (error as Error).message,
+            detail: routedResponseFailureDetail(
+              error,
+              resp.headers.get("content-type"),
+              upstreamText
+            ),
             duration_ms,
           };
         }
@@ -137,6 +151,7 @@ function buildProbeBody(llm: LlmRow, protocol: Protocol): Record<string, unknown
     return {
       model: llm.model_name,
       max_tokens: 32,
+      stream: false,
       messages: [{ role: "user", content: prompt }],
       tools: [{
         name: "relay_protocol_probe",
@@ -151,6 +166,7 @@ function buildProbeBody(llm: LlmRow, protocol: Protocol): Record<string, unknown
       model: llm.model_name,
       max_output_tokens: 32,
       store: false,
+      stream: false,
       input: [{ role: "user", content: prompt }],
       tools: [{
         type: "function",
@@ -164,6 +180,7 @@ function buildProbeBody(llm: LlmRow, protocol: Protocol): Record<string, unknown
   return {
     model: llm.model_name,
     max_tokens: 32,
+    stream: false,
     messages: [{ role: "user", content: prompt }],
     tools: [{
       type: "function",
@@ -202,4 +219,22 @@ function tryExtractPreview(text: string): string {
   } catch {
     return text.slice(0, 300);
   }
+}
+
+function routedResponseFailureDetail(
+  error: unknown,
+  contentType: string | null,
+  upstreamText: string
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const trimmed = upstreamText.trim();
+  const responseKind = !trimmed
+    ? "上游响应为空"
+    : /^(?:event|data):/m.test(trimmed)
+      ? "上游返回了 SSE，而本次请求要求非流式 JSON"
+      : "上游响应不是可转换的 JSON";
+  const preview = trimmed
+    ? `\n响应预览：${trimmed.slice(0, 500)}`
+    : "";
+  return `${message}\n${responseKind}\nContent-Type: ${contentType || "未提供"}${preview}`;
 }

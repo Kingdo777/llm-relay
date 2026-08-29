@@ -3,8 +3,8 @@ import { importLlms, listLlms } from "@/lib/db";
 import { normalizeLlmInput } from "@/lib/llm-input";
 import type { LlmInput } from "@/lib/types";
 
-const FORMAT_VERSION = 3;
-const SUPPORTED_FORMAT_VERSIONS = new Set([1, 2, FORMAT_VERSION]);
+const FORMAT_VERSION = 4;
+const SUPPORTED_FORMAT_VERSIONS = new Set([1, 2, 3, FORMAT_VERSION]);
 const MAX_IMPORT_COUNT = 500;
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -19,6 +19,7 @@ export async function GET() {
     openai_base_url: llm.openai_base_url,
     anthropic_base_url: llm.anthropic_base_url,
     token: llm.token,
+    is_code_agent: llm.is_code_agent === 1,
     app_id: llm.app_id,
     model_name: llm.model_name,
     enabled: llm.enabled === 1,
@@ -108,7 +109,19 @@ export async function POST(req: Request) {
 
     let normalized: ReturnType<typeof normalizeLlmInput>;
     try {
-      normalized = normalizeLlmInput(item as Partial<LlmInput>);
+      // v1-v3 没有显式供应商字段。仅在导入旧文件时沿用历史 app_id
+      // 语义完成一次性转换；v4 起 app_id 不再决定供应商类型。
+      const legacyIsCodeAgent =
+        body.version < FORMAT_VERSION &&
+        typeof item.app_id === "string" &&
+        item.app_id.trim() !== "";
+      normalized = normalizeLlmInput({
+        ...(item as Partial<LlmInput>),
+        is_code_agent:
+          body.version < FORMAT_VERSION
+            ? legacyIsCodeAgent
+            : (item.is_code_agent as boolean | undefined),
+      });
     } catch (error) {
       return invalidItem(index, `字段格式错误：${(error as Error).message}`);
     }

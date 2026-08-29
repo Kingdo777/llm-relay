@@ -11,7 +11,7 @@ type ListableModel = Pick<
   | "openai_base_url"
   | "anthropic_base_url"
   | "anthropic_supported"
-  | "app_id"
+  | "is_code_agent"
 >;
 
 /**

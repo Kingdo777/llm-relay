@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { extractRecoverableTokenUsage } from "./usage";
+import { normalizeCodeAgentBaseUrl } from "./format";
 import type {
   DashboardStats,
   ModelStats24h,
@@ -29,7 +30,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -264,6 +265,58 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
       );
     }
   }
+  if (fromVersion < 15) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(llms)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("is_code_agent")) {
+      db.exec(
+        "ALTER TABLE llms ADD COLUMN is_code_agent INTEGER NOT NULL DEFAULT 0 CHECK (is_code_agent IN (0, 1))"
+      );
+      // v15 之前没有显式供应商类型，只能在升级时用旧 app_id 一次性回填。
+      // 之后的运行时逻辑一律读取 is_code_agent，不再把 app_id 当类型标记。
+      db.exec(`UPDATE llms
+        SET is_code_agent = 1,
+          route_mode = CASE
+            WHEN route_mode = 'off' THEN 'anthropic-to-openai'
+            ELSE route_mode
+          END,
+          openai_supported = NULL,
+          anthropic_supported = NULL,
+          openai_responses_supported = NULL,
+          protocols_tested_at = NULL
+        WHERE trim(COALESCE(app_id, '')) <> ''`);
+
+      const legacyCodeAgents = db
+        .prepare(
+          `SELECT id, openai_base_url, anthropic_base_url
+           FROM llms WHERE is_code_agent = 1`
+        )
+        .all() as Array<{
+          id: number;
+          openai_base_url: string | null;
+          anthropic_base_url: string | null;
+        }>;
+      const normalizeUrls = db.prepare(
+        `UPDATE llms
+         SET openai_base_url = ?, anthropic_base_url = ?
+         WHERE id = ?`
+      );
+      for (const row of legacyCodeAgents) {
+        normalizeUrls.run(
+          row.openai_base_url
+            ? normalizeCodeAgentBaseUrl(row.openai_base_url)
+            : null,
+          row.anthropic_base_url
+            ? normalizeCodeAgentBaseUrl(row.anthropic_base_url)
+            : null,
+          row.id
+        );
+      }
+    }
+  }
 }
 
 /** 一次性修正可从现存响应可靠恢复的缓存用量与旧版 CodeAgent 双算。 */
@@ -334,6 +387,7 @@ function createTables(db: Database.Database) {
       openai_base_url   TEXT,
       anthropic_base_url TEXT,
       token             TEXT NOT NULL,
+      is_code_agent     INTEGER NOT NULL DEFAULT 0 CHECK (is_code_agent IN (0, 1)),
       app_id            TEXT NOT NULL DEFAULT '',
       model_name        TEXT NOT NULL,
       enabled           INTEGER NOT NULL DEFAULT 1,
@@ -451,7 +505,9 @@ const llmSelect = `SELECT id, name, alias,
   COALESCE(NULLIF(openai_base_url, ''), NULLIF(anthropic_base_url, ''), '') AS base_url,
   COALESCE(openai_base_url, '') AS openai_base_url,
   COALESCE(anthropic_base_url, '') AS anthropic_base_url,
-  token, COALESCE(app_id, '') AS app_id, model_name, enabled, created_at, updated_at,
+  token,
+  CASE WHEN is_code_agent = 1 THEN 1 ELSE 0 END AS is_code_agent,
+  COALESCE(app_id, '') AS app_id, model_name, enabled, created_at, updated_at,
   openai_supported, anthropic_supported, openai_responses_supported, protocols_tested_at
   FROM llms`;
 
@@ -491,8 +547,15 @@ function routeModeFromInput(
     : fallback;
 }
 
-function assertRouteTargetAvailable(appId: string, routeMode: RouteMode): void {
-  if (appId.trim() && routeMode === "openai-to-anthropic") {
+function assertCodeAgentConfig(
+  isCodeAgent: boolean,
+  appId: string,
+  routeMode: RouteMode
+): void {
+  if (isCodeAgent && !appId.trim()) {
+    throw new Error("CodeAgent 配置必须填写 app_id");
+  }
+  if (isCodeAgent && routeMode === "openai-to-anthropic") {
     throw new Error("CodeAgent 没有 Anthropic 后端，不能使用 O→A 路由");
   }
 }
@@ -500,13 +563,17 @@ function assertRouteTargetAvailable(appId: string, routeMode: RouteMode): void {
 export function createLlm(input: LlmInput): LlmRow {
   const ts = now();
   const urls = urlsFromInput(input);
-  const routeMode = routeModeFromInput(input);
+  const routeMode = routeModeFromInput(
+    input,
+    input.is_code_agent === true ? "anthropic-to-openai" : "off"
+  );
   const appId = input.app_id?.trim() ?? "";
-  assertRouteTargetAvailable(appId, routeMode);
+  const isCodeAgent = input.is_code_agent === true;
+  assertCodeAgentConfig(isCodeAgent, appId, routeMode);
   db.prepare(
     `INSERT INTO llms
-       (name, alias, url_mode, route_mode, openai_base_url, anthropic_base_url, token, app_id, model_name, enabled, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (name, alias, url_mode, route_mode, openai_base_url, anthropic_base_url, token, is_code_agent, app_id, model_name, enabled, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.name,
     input.alias,
@@ -515,6 +582,7 @@ export function createLlm(input: LlmInput): LlmRow {
     urls.openai,
     urls.anthropic,
     input.token,
+    isCodeAgent ? 1 : 0,
     appId,
     input.model_name,
     input.enabled === false ? 0 : 1,
@@ -536,16 +604,21 @@ export function updateLlm(
 	const urls = urlsFromInput(input);
 	const routeMode = routeModeFromInput(input, existing.route_mode);
 	const appId = input.app_id === undefined ? existing.app_id : input.app_id.trim();
-	assertRouteTargetAvailable(appId, routeMode);
+	const isCodeAgent = input.is_code_agent === undefined
+		? existing.is_code_agent === 1
+		: input.is_code_agent;
+	assertCodeAgentConfig(isCodeAgent, appId, routeMode);
 	const endpointChanged = urls.mode !== existing.url_mode ||
 		routeMode !== existing.route_mode ||
 		urls.openai !== existing.openai_base_url ||
 		urls.anthropic !== existing.anthropic_base_url ||
-		input.token !== existing.token || appId !== existing.app_id ||
+		input.token !== existing.token ||
+		isCodeAgent !== (existing.is_code_agent === 1) ||
+		appId !== existing.app_id ||
 		input.model_name !== existing.model_name;
 	db.prepare(
 		`UPDATE llms
-	 SET name = ?, alias = ?, url_mode = ?, route_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, app_id = ?, model_name = ?, enabled = ?, updated_at = ?,
+	 SET name = ?, alias = ?, url_mode = ?, route_mode = ?, openai_base_url = ?, anthropic_base_url = ?, token = ?, is_code_agent = ?, app_id = ?, model_name = ?, enabled = ?, updated_at = ?,
 	     openai_supported = ?, anthropic_supported = ?, openai_responses_supported = ?, protocols_tested_at = ?
 	 WHERE id = ?`
 	).run(
@@ -556,6 +629,7 @@ export function updateLlm(
     urls.openai,
     urls.anthropic,
     input.token,
+    isCodeAgent ? 1 : 0,
     appId,
     input.model_name,
     input.enabled === false ? 0 : 1,

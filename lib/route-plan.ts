@@ -9,7 +9,11 @@ export interface RoutePlan {
 
 type RoutableLlm = Pick<
   LlmRow,
-  "name" | "route_mode" | "openai_base_url" | "anthropic_base_url" | "app_id"
+  | "name"
+  | "route_mode"
+  | "openai_base_url"
+  | "anthropic_base_url"
+  | "is_code_agent"
 >;
 
 /** 当前客户端协议是否由 route_mode 转发到另一协议。 */
@@ -45,7 +49,7 @@ export function resolveRoute(
   }
 
   const routed = backendProtocol !== clientProtocol;
-  if (backendProtocol === "anthropic" && llm.app_id.trim()) {
+  if (backendProtocol === "anthropic" && llm.is_code_agent === 1) {
     return {
       error: routed
         ? "CodeAgent 没有 Anthropic 后端，无法使用 O→A 路由"

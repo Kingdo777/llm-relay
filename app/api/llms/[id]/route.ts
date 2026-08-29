@@ -57,7 +57,10 @@ export async function PUT(req: Request, { params }: Ctx) {
         { status: 409 }
       );
     }
-    if (msg.includes("CodeAgent 没有 Anthropic 后端")) {
+    if (
+      msg.includes("CodeAgent 没有 Anthropic 后端") ||
+      msg.includes("CodeAgent 配置必须填写 app_id")
+    ) {
       return NextResponse.json(
         { ok: false, error: msg },
         { status: 400 }

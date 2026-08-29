@@ -19,6 +19,7 @@ const models = [
     anthropic_base_url: "https://example.com",
     anthropic_supported: 1,
     app_id: "",
+    is_code_agent: 0,
   },
   {
     alias: "model-b",
@@ -30,6 +31,7 @@ const models = [
     anthropic_base_url: "https://example.com",
     anthropic_supported: 0,
     app_id: "",
+    is_code_agent: 0,
   },
   {
     alias: "disabled",
@@ -41,6 +43,7 @@ const models = [
     anthropic_base_url: "https://example.com",
     anthropic_supported: 1,
     app_id: "",
+    is_code_agent: 0,
   },
   {
     alias: "CodeAgent-model",
@@ -52,6 +55,7 @@ const models = [
     anthropic_base_url: "https://code-agent.example/v1",
     anthropic_supported: null,
     app_id: "code-agent-app",
+    is_code_agent: 1,
   },
   {
     alias: "CodeAgent-routed",
@@ -63,6 +67,7 @@ const models = [
     anthropic_base_url: "https://code-agent.example/v1",
     anthropic_supported: 1,
     app_id: "code-agent-app",
+    is_code_agent: 1,
   },
 ] as LlmRow[];
 

@@ -293,6 +293,17 @@ test("Anthropic request -> OpenAI maps block order and strict tools", () => {
   ]);
 });
 
+test("Anthropic request -> OpenAI explicitly preserves non-streaming mode", () => {
+  const converted = convertAnthropicRequestToOpenAIChat({
+    model: "claude-model",
+    max_tokens: 32,
+    messages: [{ role: "user", content: "hi" }],
+  });
+
+  assert.equal(converted.stream, false);
+  assert.equal(converted.stream_options, undefined);
+});
+
 test("request conversion fails explicitly on unknown semantic fields and blocks", () => {
   assert.throws(
     () =>

@@ -202,4 +202,90 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
     truncatedOversizedCompletedLog?.error ?? "",
     /Responses SSE/
   );
+
+  let routedHeaders = new Headers();
+  let routedBody: Record<string, unknown> = {};
+  let routedUrl = "";
+  const codeAgentLlm = {
+    ...llm,
+    is_code_agent: 1 as const,
+    app_id: "code-agent-app",
+    openai_base_url: "https://code-agent.example/v1",
+    anthropic_base_url: "https://code-agent.example/v1",
+  };
+  globalThis.fetch = async (input, init) => {
+    routedUrl = String(input);
+    routedHeaders = new Headers(init?.headers);
+    routedBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+      string,
+      unknown
+    >;
+    return Response.json({
+      id: "chatcmpl_probe",
+      object: "chat.completion",
+      model: "upstream-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    });
+  };
+  const routed = await relayRequest(
+    codeAgentLlm,
+    {
+      clientProtocol: "anthropic",
+      backendProtocol: "openai",
+      baseUrl: codeAgentLlm.openai_base_url,
+      routed: true,
+    },
+    "POST",
+    new Headers({
+      "content-type": "application/json",
+      accept: "text/event-stream",
+    }),
+    JSON.stringify({
+      model: codeAgentLlm.alias,
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    })
+  );
+  const routedJson = await routed.response.json();
+  assert.equal(routedJson.type, "message");
+  assert.equal(routedJson.content[0].text, "OK");
+  assert.equal(routedUrl, "https://code-agent.example/v2/chat/completions");
+  assert.equal(routedBody.stream, false);
+  assert.equal(routedHeaders.get("accept"), "application/json");
+  assert.equal(routedHeaders.get("x-auth-token"), codeAgentLlm.token);
+  assert.equal(routedHeaders.get("app-id"), "code-agent-app");
+  assert.equal(database.getLog(routed.logId!)?.endpoint, "v2/chat/completions");
+
+  globalThis.fetch = async () =>
+    new Response(
+      'data: {"id":"chatcmpl_bad","choices":[]}\n\ndata: [DONE]\n\n',
+      { headers: { "content-type": "text/event-stream" } }
+    );
+  const mismatched = await relayRequest(
+    codeAgentLlm,
+    {
+      clientProtocol: "anthropic",
+      backendProtocol: "openai",
+      baseUrl: codeAgentLlm.openai_base_url,
+      routed: true,
+    },
+    "POST",
+    new Headers({ "content-type": "application/json" }),
+    JSON.stringify({
+      model: codeAgentLlm.alias,
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    })
+  );
+  assert.equal(mismatched.response.status, 502);
+  const mismatchError = await mismatched.response.json();
+  assert.match(mismatchError.error.message, /忽略 stream=false 并返回 SSE/);
+  assert.equal(database.getLog(mismatched.logId!)?.status, "failed");
 });

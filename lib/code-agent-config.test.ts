@@ -42,15 +42,41 @@ test("generates unified configs while preserving upstream model names", () => {
     }))
   );
   assert.equal(result.inputs[0].url_mode, "unified");
+  assert.equal(result.inputs[0].route_mode, "anthropic-to-openai");
+  assert.equal(result.inputs[0].is_code_agent, true);
   assert.equal(result.inputs[0].app_id, "code-agent-app");
   assert.equal(
     result.inputs[0].openai_base_url,
-    "https://code-agent.internal/v1"
+    "https://code-agent.internal/v2"
   );
   assert.equal(
     result.inputs[0].anthropic_base_url,
-    "https://code-agent.internal/v1"
+    "https://code-agent.internal/v2"
   );
+});
+
+test("normalizes every CodeAgent Base URL form to v2", () => {
+  for (const apiBaseUrl of [
+    "https://code-agent.internal",
+    "https://code-agent.internal/v1",
+    "https://code-agent.internal/v2/",
+    "https://code-agent.internal/v2/v1",
+  ]) {
+    const result = parseCodeAgentPayload({
+      ...base,
+      api_base_url: apiBaseUrl,
+      models: ["module"],
+    });
+    assert.ok("inputs" in result);
+    assert.equal(
+      result.inputs[0].openai_base_url,
+      "https://code-agent.internal/v2"
+    );
+    assert.equal(
+      result.inputs[0].anthropic_base_url,
+      "https://code-agent.internal/v2"
+    );
+  }
 });
 
 test("rejects a duplicate model instead of partially syncing", () => {
@@ -68,6 +94,20 @@ test("requires credentials when models are present", () => {
   assert.deepEqual(
     parseCodeAgentPayload({ ...base, api_base_url: "" }),
     { error: "models 非空时 api_base_url 不能为空" }
+  );
+  assert.deepEqual(
+    parseCodeAgentPayload({ ...base, api_base_url: "not-a-url" }),
+    {
+      error:
+        "models 非空时 api_base_url 必须是合法的 http:// 或 https:// 地址",
+    }
+  );
+  assert.deepEqual(
+    parseCodeAgentPayload({ ...base, api_base_url: "ftp://code-agent.internal" }),
+    {
+      error:
+        "models 非空时 api_base_url 必须是合法的 http:// 或 https:// 地址",
+    }
   );
   assert.deepEqual(
     parseCodeAgentPayload({ ...base, appid: "" }),

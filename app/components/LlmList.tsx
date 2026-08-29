@@ -176,6 +176,8 @@ export function LlmList() {
           base_url: l.base_url,
           openai_base_url: l.openai_base_url,
           anthropic_base_url: l.anthropic_base_url,
+          is_code_agent: l.is_code_agent === 1,
+          app_id: l.app_id,
           enabled,
         }),
       });
@@ -233,7 +235,7 @@ export function LlmList() {
     | { label: string; cls: "supported" | "unsupported" | "unknown" | "routed"; success: boolean | null; detail: string | null }
   {
     const routed = isRoutedProtocol(l.route_mode, key);
-    if (!routed && key === "anthropic" && l.app_id.trim()) {
+    if (!routed && key === "anthropic" && l.is_code_agent === 1) {
       return {
         label: "不支持",
         cls: "unsupported",
@@ -320,6 +322,7 @@ export function LlmList() {
         alias,
         token: l.token,
         app_id: l.app_id,
+        is_code_agent: l.is_code_agent === 1,
         model_name: l.model_name,
         url_mode: l.url_mode,
         route_mode: l.route_mode,

@@ -8,6 +8,7 @@ export async function GET() {
       name: model.name,
       alias: model.alias,
       model_name: model.model_name,
+      is_code_agent: model.is_code_agent === 1,
       route_mode: model.route_mode,
       openai_supported: model.openai_supported,
       anthropic_supported: model.anthropic_supported,

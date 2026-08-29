@@ -47,6 +47,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
   const [anthropicBaseUrl, setAnthropicBaseUrl] = useState("");
   const [token, setToken] = useState("");
+  const [isCodeAgent, setIsCodeAgent] = useState(false);
+  const [appId, setAppId] = useState("");
   const [modelName, setModelName] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -65,6 +67,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       setOpenaiBaseUrl(llm.openai_base_url);
       setAnthropicBaseUrl(llm.anthropic_base_url);
       setToken(llm.token);
+      setIsCodeAgent(llm.is_code_agent === 1);
+      setAppId(llm.app_id);
       setModelName(llm.model_name);
       setEnabled(!!llm.enabled);
     } else {
@@ -76,6 +80,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       setOpenaiBaseUrl("");
       setAnthropicBaseUrl("");
       setToken("");
+      setIsCodeAgent(false);
+      setAppId("");
       setModelName("");
       setEnabled(true);
     }
@@ -89,6 +95,14 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     }
     if (!/^[A-Za-z0-9_.-]+$/.test(alias)) {
       show("别名仅允许字母、数字、下划线、连字符、点", "error");
+      return;
+    }
+    if (isCodeAgent && !appId.trim()) {
+      show("CodeAgent 配置必须填写 app_id", "error");
+      return;
+    }
+    if (isCodeAgent && routeMode === "openai-to-anthropic") {
+      show("CodeAgent 没有 Anthropic 后端，不能使用 O→A 路由", "error");
       return;
     }
     const normalizedBaseURL = baseUrl.trim();
@@ -110,6 +124,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
       name,
       alias,
       token,
+      is_code_agent: isCodeAgent,
+      app_id: isCodeAgent ? appId.trim() : "",
       model_name: modelName,
       url_mode: urlMode,
       route_mode: routeMode,
@@ -191,6 +207,8 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
     openaiBaseUrl !== llm.openai_base_url ||
     anthropicBaseUrl !== llm.anthropic_base_url ||
     token !== llm.token ||
+    isCodeAgent !== (llm.is_code_agent === 1) ||
+    appId !== llm.app_id ||
     modelName !== llm.model_name ||
     enabled !== !!llm.enabled ||
     routeMode !== llm.route_mode
@@ -255,6 +273,44 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
             <div className="hint">中转时由本站注入鉴权头，客户端忽略 token</div>
           </div>
 
+          <div className="field">
+            <label>CodeAgent</label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={isCodeAgent}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setIsCodeAgent(checked);
+                  if (checked) {
+                    setUrlMode("unified");
+                    setRouteMode("anthropic-to-openai");
+                    if (!baseUrl) setBaseUrl(openaiBaseUrl || anthropicBaseUrl);
+                  }
+                }}
+              />
+              <span className="slider" />
+            </label>
+            <div className="hint">
+              开启后使用 CodeAgent 专用鉴权和 `/v2` 上游地址。
+            </div>
+          </div>
+
+          {isCodeAgent && (
+            <div className="field">
+              <label>App ID *</label>
+              <input
+                className="input"
+                value={appId}
+                onChange={(e) => setAppId(e.target.value)}
+                placeholder="CodeAgent app-id"
+              />
+              <div className="hint">
+                作为 <b>app-id</b> 请求头发送；CodeAgent 配置必填。
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               borderTop: `1px solid var(--border)`,
@@ -286,6 +342,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               <button
                 type="button"
                 className={urlMode === "separate" ? "active" : ""}
+                disabled={isCodeAgent}
                 onClick={() => {
                   setUrlMode("separate");
                   if (!openaiBaseUrl) setOpenaiBaseUrl(baseUrl);
@@ -308,6 +365,7 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
               />
               <div className="hint">
                 OpenAI Chat、Responses 与 Anthropic 都从该地址拼接各自端点。
+                {isCodeAgent ? " CodeAgent 会自动归一为 /v2。" : ""}
               </div>
             </div>
           ) : (
@@ -380,9 +438,9 @@ export function LlmForm({ llm, onClose, onSaved }: Props) {
                   routeMode === "openai-to-anthropic" ? "active" : ""
                 }
                 onClick={() => setRouteMode("openai-to-anthropic")}
-                disabled={!!llm?.app_id.trim()}
+                disabled={isCodeAgent}
                 title={
-                  llm?.app_id.trim()
+                  isCodeAgent
                     ? "CodeAgent 没有 Anthropic 后端，不能使用 O→A"
                     : "OpenAI Chat 与 Responses 请求转换并路由到 Anthropic"
                 }

@@ -105,14 +105,19 @@ npm run start      # 生产启动
 {
   "access_token": "secret",
   "appid": "your-app-id",
-  "api_base_url": "https://internal.example/v1",
+  "api_base_url": "https://internal.example/v2",
   "models": ["module", "m2"]
 }
 ```
 
 - LLM 管理页始终显示“添加 CodeAgent”按钮；占位脚本返回空 `models` 时，点击会提示找不到配置。
+- 手工新增或编辑配置时也可开启“CodeAgent”开关；开启后 `app_id` 必填，
+  默认启用 A → O 路由。
 - CodeAgent 使用脚本返回的合一 `api_base_url`，仅支持 OpenAI Chat / Responses，
   不支持 Anthropic。
+- CodeAgent 上游固定使用 `/v2`；脚本返回根地址、`/v1` 或 `/v2` 都会归一为
+  `/v2`，客户端仍使用 relay 对外的 `/v1/...` 地址。
+- 数据库使用独立的 `is_code_agent` 字段识别供应商；`app_id` 仅用于鉴权。
 - CodeAgent 请求使用 `x-auth-token: access_token` 与 `app-id: appid`，不发送 Bearer 鉴权。
 - 服务端还会固定注入 `x-innercc-request-kind: main_conversation`。
 - `module` 会生成名称/别名 `CodeAgent-module`，真实模型名仍为 `module`。
