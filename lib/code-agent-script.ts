@@ -10,7 +10,7 @@ const SCRIPT_PATH = path.join(
   "code_agent_config.py"
 );
 const PYTHON_COMMAND = process.env.CODE_AGENT_PYTHON?.trim() || "python3";
-const SCRIPT_TIMEOUT_MS = 10_000;
+const SCRIPT_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 let inFlightLoad: Promise<LlmInput[]> | null = null;
 
