@@ -472,6 +472,8 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
     id: "chatcmpl_1",
     object: "chat.completion",
     created: 123,
+    request_timestamp: "2026-08-29T12:34:56.000Z",
+    created_timestamp: 1788000000,
     model: "gpt",
     choices: [
       {
@@ -501,6 +503,8 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
   });
 
   assert.equal(converted.stop_reason, "tool_use");
+  assert.equal(converted.request_timestamp, undefined);
+  assert.equal(converted.created_timestamp, undefined);
   assert.deepEqual(converted.content, [
     { type: "text", text: "Calling it" },
     { type: "tool_use", id: "call_7", name: "lookup", input: { x: 7 } },

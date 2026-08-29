@@ -1367,6 +1367,9 @@ export function convertOpenAIChatResponseToAnthropic(
       "usage",
       "system_fingerprint",
       "service_tier",
+      // CodeAgent 的非标准追踪元数据；不影响 Anthropic 响应语义。
+      "request_timestamp",
+      "created_timestamp",
     ],
     OAI_TO_ANT,
     "$response"
