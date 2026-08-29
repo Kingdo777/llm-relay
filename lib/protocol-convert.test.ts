@@ -304,6 +304,20 @@ test("Anthropic request -> OpenAI explicitly preserves non-streaming mode", () =
   assert.equal(converted.stream_options, undefined);
 });
 
+test("Anthropic request -> OpenAI ignores non-semantic timestamp metadata", () => {
+  const converted = convertAnthropicRequestToOpenAIChat({
+    model: "claude-model",
+    max_tokens: 32,
+    messages: [{ role: "user", content: "hi" }],
+    request_timestamp: "2026-08-29T12:34:56.000Z",
+    created_timestamp: 1788000000,
+  });
+
+  assert.equal(converted.request_timestamp, undefined);
+  assert.equal(converted.created_timestamp, undefined);
+  assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
+});
+
 test("request conversion fails explicitly on unknown semantic fields and blocks", () => {
   assert.throws(
     () =>

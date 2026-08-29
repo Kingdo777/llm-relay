@@ -600,6 +600,10 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       "tools",
       "tool_choice",
       "metadata",
+      // 部分 Anthropic 兼容客户端附带的追踪元数据，不影响生成语义；
+      // OpenAI Chat 没有对应字段，按兼容约定安全忽略。
+      "request_timestamp",
+      "created_timestamp",
     ],
     ANT_TO_OAI,
     "$request"
