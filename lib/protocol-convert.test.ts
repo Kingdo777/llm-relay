@@ -481,6 +481,7 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
         message: {
           role: "assistant",
           content: "Calling it",
+          reasoning_content: "provider-private reasoning",
           tool_calls: [
             {
               id: "call_7",
@@ -730,7 +731,16 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
     openAIEvent({
       id: "chatcmpl_s",
       model: "gpt-s",
-      choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: "assistant",
+            reasoning_content: "provider-private reasoning",
+          },
+          finish_reason: null,
+        },
+      ],
     }),
     openAIEvent({
       id: "chatcmpl_s",
@@ -904,7 +914,7 @@ test("OpenAI SSE rejects unknown deltas and invalid completed tool JSON", () => 
           choices: [
             {
               index: 0,
-              delta: { reasoning_content: "hidden" },
+              delta: { provider_secret_field: "hidden" },
               finish_reason: null,
             },
           ],

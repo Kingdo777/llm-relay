@@ -1394,7 +1394,16 @@ export function convertOpenAIChatResponseToAnthropic(
   const message = objectAt(choice.message, OAI_TO_ANT, "$response.choices[0].message");
   assertAllowedKeys(
     message,
-    ["role", "content", "tool_calls", "refusal", "annotations", "audio", "function_call"],
+    [
+      "role",
+      "content",
+      "tool_calls",
+      "reasoning_content",
+      "refusal",
+      "annotations",
+      "audio",
+      "function_call",
+    ],
     OAI_TO_ANT,
     "$response.choices[0].message"
   );
@@ -2089,7 +2098,15 @@ export class OpenAIToAnthropicStreamConverter {
     const delta = objectAt(choice.delta ?? {}, OAI_TO_ANT, "$stream.choices[0].delta");
     assertAllowedKeys(
       delta,
-      ["role", "content", "tool_calls", "refusal", "function_call", "audio"],
+      [
+        "role",
+        "content",
+        "tool_calls",
+        "reasoning_content",
+        "refusal",
+        "function_call",
+        "audio",
+      ],
       OAI_TO_ANT,
       "$stream.choices[0].delta"
     );
