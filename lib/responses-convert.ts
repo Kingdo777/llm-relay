@@ -3,8 +3,9 @@
  *
  * This module intentionally has no dependency on the relay/database layer.  It
  * converts only the subset that has a lossless Anthropic equivalent: text and
- * client-side function tools.  Stateful Responses features and hosted tools
- * fail loudly instead of being silently ignored.
+ * client-side function tools. Stateful Responses features fail loudly. Codex
+ * capability-advertisement tools that cannot execute through Anthropic are
+ * removed while ordinary function tools remain available.
  */
 
 type JsonObject = Record<string, unknown>;
@@ -122,8 +123,21 @@ function mapResponsesTools(value: unknown): JsonObject[] | undefined {
     throw new ConversionError("tools 必须是数组", "invalid_payload", "tools");
   }
   const names = new Set<string>();
-  return value.map((raw, index) => {
+  const mapped: JsonObject[] = [];
+  value.forEach((raw, index) => {
     const tool = objectValue(raw, `tools[${index}]`);
+    // Codex advertises local/app capability namespaces alongside ordinary
+    // top-level function tools. Anthropic has no namespace or OpenAI-hosted
+    // web-search executor; omitting these advertisements leaves the runnable
+    // function tools intact. Other hosted tools still fail explicitly because
+    // silently removing them could materially change a user-authored request.
+    if (
+      tool.type === "namespace" ||
+      tool.type === "web_search" ||
+      tool.type === "web_search_preview"
+    ) {
+      return;
+    }
     if (tool.type !== "function") {
       throw new ConversionError(
         `Responses 托管工具 ${String(tool.type ?? "未知")} 无法路由到 Anthropic；仅支持自定义 function`,
@@ -173,8 +187,9 @@ function mapResponsesTools(value: unknown): JsonObject[] | undefined {
     // Current Anthropic versions understand strict client tools. Preserve it
     // when supplied, but do not invent it for older upstreams.
     if (typeof tool.strict === "boolean") result.strict = tool.strict;
-    return result;
+    mapped.push(result);
   });
+  return mapped;
 }
 
 function mapToolChoice(value: unknown, parallel: unknown): JsonObject | undefined {
@@ -183,6 +198,10 @@ function mapToolChoice(value: unknown, parallel: unknown): JsonObject | undefine
   }
 
   let result: JsonObject;
+  // Anthropic defaults to auto. Omitting the explicit choice is semantically
+  // identical and also works with compatibility gateways that only accept a
+  // forced function object when tool_choice is present.
+  if (value === "auto" && parallel !== false) return undefined;
   if (value === "auto") result = { type: "auto" };
   else if (value === "none") result = { type: "none" };
   else if (value === "required") result = { type: "any" };
@@ -471,7 +490,7 @@ export function convertResponsesRequestToAnthropic(
   };
   if (system.length) result.system = system;
   const tools = mapResponsesTools(body.tools);
-  if (tools !== undefined) result.tools = tools;
+  if (tools && tools.length > 0) result.tools = tools;
   let choice: JsonObject | undefined;
   if (tools && tools.length > 0) {
     choice = mapToolChoice(body.tool_choice, body.parallel_tool_calls);

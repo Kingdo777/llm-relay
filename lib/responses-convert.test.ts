@@ -157,7 +157,7 @@ test("rejects stateful Responses features, hosted tools and unsupported content"
     [{ model: "m", input: "x", store: false, conversation: "conv_1" }, "unsupported_responses_feature", "conversation"],
     [{ model: "m", input: "x", store: true }, "unsupported_responses_feature", "store"],
     [{ model: "m", input: "x", store: false, prompt: { id: "pmpt_1" } }, "unsupported_responses_feature", "prompt"],
-    [{ model: "m", input: "x", store: false, tools: [{ type: "web_search" }] }, "unsupported_hosted_tool", "tools[0]"],
+    [{ model: "m", input: "x", store: false, tools: [{ type: "file_search" }] }, "unsupported_hosted_tool", "tools[0]"],
     [{ model: "m", store: false, input: [{ role: "user", content: [{ type: "input_image", image_url: "x" }] }] }, "unsupported_content", "input[0].content[0]"],
     [{ model: "m", input: "x", store: false, temperature: "hot" }, "invalid_payload", "temperature"],
     [{ model: "m", input: "x", store: false, tools: [{ type: "function", name: "f", parameters: [] }] }, "invalid_payload", "tools[0].parameters"],
@@ -169,6 +169,69 @@ test("rejects stateful Responses features, hosted tools and unsupported content"
       (error) => error instanceof ConversionError && error.code === code && error.field === field
     );
   }
+});
+
+test("drops Codex capability tools while preserving runnable functions", () => {
+  const converted = convertResponsesRequestToAnthropic({
+    model: "m",
+    store: false,
+    input: "run pwd",
+    parallel_tool_calls: true,
+    tool_choice: "auto",
+    tools: [
+      {
+        type: "function",
+        name: "exec_command",
+        description: "Run a command",
+        strict: false,
+        parameters: {
+          type: "object",
+          properties: { cmd: { type: "string" } },
+          required: ["cmd"],
+        },
+      },
+      {
+        type: "namespace",
+        name: "multi_agent_v1",
+        description: "Agent tools",
+        tools: [
+          {
+            type: "function",
+            name: "spawn_agent",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+      { type: "web_search", external_web_access: false },
+    ],
+  });
+
+  assert.deepEqual(converted.tools, [
+    {
+      name: "exec_command",
+      description: "Run a command",
+      strict: false,
+      input_schema: {
+        type: "object",
+        properties: { cmd: { type: "string" } },
+        required: ["cmd"],
+      },
+    },
+  ]);
+  assert.equal(converted.tool_choice, undefined);
+
+  const noRunnableTools = convertResponsesRequestToAnthropic({
+    model: "m",
+    store: false,
+    input: "plain text",
+    tool_choice: "auto",
+    tools: [
+      { type: "namespace", name: "apps", description: "Apps", tools: [] },
+      { type: "web_search_preview" },
+    ],
+  });
+  assert.equal(noRunnableTools.tools, undefined);
+  assert.equal(noRunnableTools.tool_choice, undefined);
 });
 
 test("ignores unknown request extensions and optional unmapped controls", () => {
