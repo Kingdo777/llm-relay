@@ -220,4 +220,16 @@ test("fills only unambiguous empty function tool types", () => {
     normalizeRequestToolTypes(anthropic, "anthropic"),
     anthropic
   );
+  const anthropicFallback = JSON.parse(
+    normalizeRequestToolTypes(anthropic, "anthropic", {
+      anthropicFunctionFallback: true,
+    })
+  );
+  assert.deepEqual(anthropicFallback.tools[0], {
+    type: "function",
+    function: {
+      name: "lookup",
+      parameters: {},
+    },
+  });
 });

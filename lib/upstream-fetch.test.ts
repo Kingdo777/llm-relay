@@ -42,7 +42,13 @@ test("retries Anthropic tools with type=function only after the matching 400", a
     assert.equal(result.retriedAnthropicToolType, true);
     assert.equal(bodies.length, 2);
     assert.equal(JSON.parse(bodies[0]).tools[0].type, undefined);
-    assert.equal(JSON.parse(bodies[1]).tools[0].type, "function");
+    assert.deepEqual(JSON.parse(bodies[1]).tools[0], {
+      type: "function",
+      function: {
+        name: "lookup",
+        parameters: { type: "object", properties: {} },
+      },
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

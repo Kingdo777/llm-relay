@@ -232,7 +232,8 @@ export function normalizeRequestToolTypes(
   if (!Array.isArray(request.tools)) return body;
 
   let changed = false;
-  for (const rawTool of request.tools) {
+  for (let index = 0; index < request.tools.length; index += 1) {
+    const rawTool = request.tools[index];
     if (!rawTool || typeof rawTool !== "object" || Array.isArray(rawTool)) continue;
     const tool = rawTool as Record<string, unknown>;
     const missingType =
@@ -241,6 +242,25 @@ export function normalizeRequestToolTypes(
       (typeof tool.type === "string" && tool.type.trim() === "");
     if (!missingType) continue;
 
+    if (
+      protocol === "anthropic" &&
+      options.anthropicFunctionFallback === true &&
+      typeof tool.name === "string" &&
+      !!tool.input_schema &&
+      typeof tool.input_schema === "object" &&
+      !Array.isArray(tool.input_schema)
+    ) {
+      const fn: Record<string, unknown> = {
+        name: tool.name,
+        parameters: tool.input_schema,
+      };
+      if (typeof tool.description === "string") fn.description = tool.description;
+      if (typeof tool.strict === "boolean") fn.strict = tool.strict;
+      request.tools[index] = { type: "function", function: fn };
+      changed = true;
+      continue;
+    }
+
     const isChatFunction =
       protocol === "openai" &&
       !!tool.function &&
@@ -248,14 +268,13 @@ export function normalizeRequestToolTypes(
       !Array.isArray(tool.function);
     const isResponsesFunction =
       protocol === "openai-responses" && typeof tool.name === "string";
-    const isAnthropicFallbackFunction =
+    const isNestedAnthropicFallbackFunction =
       protocol === "anthropic" &&
       options.anthropicFunctionFallback === true &&
-      typeof tool.name === "string" &&
-      !!tool.input_schema &&
-      typeof tool.input_schema === "object" &&
-      !Array.isArray(tool.input_schema);
-    if (isChatFunction || isResponsesFunction || isAnthropicFallbackFunction) {
+      !!tool.function &&
+      typeof tool.function === "object" &&
+      !Array.isArray(tool.function);
+    if (isChatFunction || isResponsesFunction || isNestedAnthropicFallbackFunction) {
       tool.type = "function";
       changed = true;
     }

@@ -9,9 +9,9 @@ export interface UpstreamFetchResult {
 }
 
 /**
- * 某些 Anthropic 兼容网关非标准地要求客户端工具携带 type="function"，
- * 而标准 Anthropic/DeepSeek 会拒绝这个字段。先发标准格式，仅在上游明确
- * 报该反序列化错误时补字段重试一次，可同时兼容两类实现。
+ * 某些 Anthropic 兼容网关非标准地要求 OpenAI 的嵌套 function 工具外形，
+ * 而标准 Anthropic/DeepSeek 会拒绝这个结构。先发标准格式，仅在上游明确
+ * 报 type 反序列化错误时转换工具结构重试一次，可同时兼容两类实现。
  */
 export async function fetchUpstreamWithToolTypeFallback(
   url: string,
