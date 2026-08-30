@@ -476,6 +476,7 @@ export async function relayRequest(
     let finalized = false;
     let streamError = "";
     let firstByteMs: number | null = null;
+    let terminated = false;
 
     const finalize = () => {
       if (finalized) return;
@@ -518,89 +519,123 @@ export async function relayRequest(
       });
     };
 
-    const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          const { done, value } = await reader.read();
-          if (done) {
-            const rawTail = rawDecoder.decode();
-            inspection.finish(rawTail);
-            if (!streamConverter) logOutput.append(rawTail);
-            if (streamConverter) {
-              const tail = streamConverter.finish();
-              if (tail) {
-                logOutput.append(tail);
-                controller.enqueue(encoder.encode(tail));
-              }
-              if (streamConverter.didFail?.()) {
-                streamError = "上游流返回错误事件";
-              }
-            }
-            controller.close();
-            finalize();
-            return;
-          }
-          if (firstByteMs === null && value.byteLength > 0) {
-            firstByteMs = Date.now() - start;
-          }
-          const rawText = rawDecoder.decode(value, { stream: true });
-          inspection.push(rawText);
+    const consumeNext = async (
+      controller: ReadableStreamDefaultController<Uint8Array>
+    ): Promise<boolean> => {
+      if (terminated) return true;
+      try {
+        const { done, value } = await reader.read();
+        if (terminated) return true;
+        if (done) {
+          const rawTail = rawDecoder.decode();
+          inspection.finish(rawTail);
+          if (!streamConverter) logOutput.append(rawTail);
           if (streamConverter) {
-            const translated = streamConverter.feed(value);
-            if (translated) {
-              logOutput.append(translated);
-              controller.enqueue(encoder.encode(translated));
+            const tail = streamConverter.finish();
+            if (tail) {
+              logOutput.append(tail);
+              controller.enqueue(encoder.encode(tail));
             }
             if (streamConverter.didFail?.()) {
               streamError = "上游流返回错误事件";
-              try {
-                await reader.cancel(streamError);
-              } catch {
-                // 上游可能已自行关闭；仍以失败状态完成日志。
-              }
-              controller.close();
-              finalize();
-              return;
             }
-          } else {
-            logOutput.append(rawText);
-            controller.enqueue(value);
           }
-        } catch (error) {
-          streamError = (error as Error).message;
-          try {
-            await reader.cancel(error);
-          } catch {
-            // 转换失败后尽力终止上游，cancel 自身错误不覆盖原始原因。
+          terminated = true;
+          controller.close();
+          finalize();
+          return true;
+        }
+        if (firstByteMs === null && value.byteLength > 0) {
+          firstByteMs = Date.now() - start;
+        }
+        const rawText = rawDecoder.decode(value, { stream: true });
+        inspection.push(rawText);
+        if (streamConverter) {
+          const translated = streamConverter.feed(value);
+          if (translated) {
+            logOutput.append(translated);
+            controller.enqueue(encoder.encode(translated));
           }
-          if (streamConverter) {
-            const errorFrame = routedStreamErrorFrame(
-              streamError,
-              clientProtocol,
-              streamConverter
-            );
-            if (errorFrame) {
-              logOutput.append(errorFrame);
-              controller.enqueue(encoder.encode(errorFrame));
+          if (streamConverter.didFail?.()) {
+            streamError = "上游流返回错误事件";
+            terminated = true;
+            try {
+              await reader.cancel(streamError);
+            } catch {
+              // 上游可能已自行关闭；仍以失败状态完成日志。
             }
             controller.close();
-          } else {
-            controller.error(error);
+            finalize();
+            return true;
           }
-          finalize();
+        } else {
+          logOutput.append(rawText);
+          controller.enqueue(value);
         }
-      },
-      async cancel(reason) {
-        streamError = "客户端取消流式响应";
+        return false;
+      } catch (error) {
+        if (terminated) return true;
+        streamError = (error as Error).message;
+        terminated = true;
         try {
-          await reader.cancel(reason);
-        } catch (error) {
-          streamError += `：${(error as Error).message}`;
-        } finally {
-          finalize();
+          await reader.cancel(error);
+        } catch {
+          // 转换失败后尽力终止上游，cancel 自身错误不覆盖原始原因。
         }
-      },
-    });
+        if (streamConverter) {
+          const errorFrame = routedStreamErrorFrame(
+            streamError,
+            clientProtocol,
+            streamConverter
+          );
+          if (errorFrame) {
+            logOutput.append(errorFrame);
+            controller.enqueue(encoder.encode(errorFrame));
+          }
+          controller.close();
+        } else {
+          controller.error(error);
+        }
+        finalize();
+        return true;
+      }
+    };
+
+    const cancel = async (reason: unknown) => {
+      if (terminated) return;
+      terminated = true;
+      streamError = "客户端取消流式响应";
+      try {
+        await reader.cancel(reason);
+      } catch (error) {
+        streamError += `：${(error as Error).message}`;
+      } finally {
+        finalize();
+      }
+    };
+
+    const underlyingSource: UnderlyingDefaultSource<Uint8Array> = streamConverter
+        ? {
+            start(controller) {
+              // Routed converters may consume upstream chunks without
+              // producing downstream bytes (thinking, ping, fragmented SSE).
+              // Pump independently of downstream pull demand so those chunks
+              // cannot leave the upstream reader and request log stranded.
+              void (async () => {
+                while (!terminated) {
+                  if (await consumeNext(controller)) break;
+                }
+              })();
+            },
+            cancel,
+          }
+        : {
+            async pull(controller) {
+              await consumeNext(controller);
+            },
+            cancel,
+          };
+    const stream = new ReadableStream<Uint8Array>(underlyingSource);
 
     const streamHeaders = plan.routed
       ? new Headers({

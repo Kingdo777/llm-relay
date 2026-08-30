@@ -935,6 +935,8 @@ type StreamItem = {
   name?: string;
   text: string;
   initialInput?: unknown;
+  /** Duplicate final snapshot for an already-open tool call. */
+  duplicateOf?: number;
 };
 
 /**
@@ -960,6 +962,7 @@ export class AnthropicToResponsesSseConverter {
   private failed = false;
   private output: JsonObject[] = [];
   private blocks = new Map<number, StreamItem>();
+  private readonly stoppedToolSnapshots = new Map<string, string[]>();
   private readonly seenBlockIndexes = new Set<number>();
   private readonly seenItemIds = new Set<string>();
   private inputBase = 0;
@@ -1012,6 +1015,10 @@ export class AnthropicToResponsesSseConverter {
     }
     const output = this.drain(true);
     if (!this.stopped) {
+      const implicitCompletion = this.finishImplicitEof();
+      if (implicitCompletion !== null) {
+        return output + implicitCompletion;
+      }
       // finish() cannot return `output` once it throws. Preserve those already
       // generated frames so failureFrame() can deliver them before terminating.
       this.pendingFrames += output;
@@ -1021,6 +1028,90 @@ export class AnthropicToResponsesSseConverter {
       );
     }
     return output;
+  }
+
+  /**
+   * Some Anthropic-compatible gateways omit message terminals, and may also
+   * omit tool block stops after complete input_json_delta payloads. Recover
+   * only bounded cases: every block was explicitly stopped; one non-empty text
+   * block remains open; or all open blocks are tools whose arguments form
+   * complete JSON objects. Empty/mixed blocks, open thinking, and partial tool
+   * JSON remain hard failures.
+   */
+  private finishImplicitEof(): string | null {
+    if (!this.created) return null;
+    // Every content block was explicitly stopped and only the message-level
+    // terminal is missing. The completed output items make the intended stop
+    // reason unambiguous.
+    if (this.blocks.size === 0) {
+      if (this.output.length === 0) return null;
+      this.stopReason = this.output.some((item) => item.type === "function_call")
+        ? "tool_use"
+        : "end_turn";
+      return this.stopMessage({});
+    }
+    const open = [...this.blocks.entries()].sort((a, b) => a[0] - b[0]);
+    if (
+      open.length === 1 &&
+      open[0][1].kind === "text" &&
+      open[0][1].text.length > 0
+    ) {
+      const out = this.stopBlock({ index: open[0][0] });
+      this.stopReason = "end_turn";
+      return out + this.stopMessage({});
+    }
+    if (open.some(([, state]) => state.kind !== "tool")) return null;
+
+    const canonical = open.filter(([, state]) => state.duplicateOf === undefined);
+    if (canonical.length === 0) return null;
+    // Reconcile each incremental call with any repeated final snapshots before
+    // mutating lifecycle state. At least one complete JSON object must exist,
+    // and all complete candidates must describe the same arguments.
+    for (const [, state] of canonical) {
+      const candidates = [
+        state.text || JSON.stringify(state.initialInput ?? {}),
+        ...open
+          .filter(([, duplicate]) => duplicate.duplicateOf === state.anthropicIndex)
+          .map(([, duplicate]) =>
+            duplicate.text || JSON.stringify(duplicate.initialInput ?? {})
+          ),
+        ...(this.stoppedToolSnapshots.get(state.itemId) ?? []),
+      ];
+      const valid: Array<{ raw: string; normalized: string }> = [];
+      for (const raw of candidates) {
+        try {
+          valid.push({
+            raw,
+            normalized: JSON.stringify(
+              parseFunctionArguments(raw, "function_call.arguments")
+            ),
+          });
+        } catch {
+          // A fragmented incremental candidate may be incomplete while the
+          // gateway's repeated final snapshot is complete.
+        }
+      }
+      if (valid.length === 0) {
+        parseFunctionArguments(candidates[0], "function_call.arguments");
+      }
+      if (new Set(valid.map((candidate) => candidate.normalized)).size !== 1) {
+        throw new ConversionError(
+          `重复工具 ${state.itemId} 的参数快照冲突`,
+          "invalid_sse",
+          "function_call.arguments"
+        );
+      }
+      state.text = valid[0].raw;
+    }
+
+    let out = "";
+    for (const [index, state] of open) {
+      if (state.duplicateOf !== undefined) this.blocks.delete(index);
+    }
+    for (const [index] of canonical) out += this.stopBlock({ index });
+    this.stopReason = "tool_use";
+    out += this.stopMessage({});
+    return out;
   }
 
   /** Alias convenient for stream flush callbacks. */
@@ -1229,7 +1320,48 @@ export class AnthropicToResponsesSseConverter {
     if (block.type === "tool_use") {
       const itemId = requiredString(block.id, "content_block_start.content_block.id");
       if (this.seenItemIds.has(itemId)) {
-        throw new ConversionError(`重复的输出 item id=${itemId}`, "invalid_sse");
+        const canonical = [...this.blocks.values()].find(
+          (state) =>
+            state.kind === "tool" &&
+            state.itemId === itemId &&
+            state.duplicateOf === undefined
+        );
+        if (!canonical) {
+          throw new ConversionError(`重复的输出 item id=${itemId}`, "invalid_sse");
+        }
+        const name = requiredString(
+          block.name,
+          "content_block_start.content_block.name"
+        );
+        if (name !== canonical.name) {
+          throw new ConversionError(
+            `重复工具 ${itemId} 的名称发生变化`,
+            "invalid_sse",
+            "content_block_start.content_block.name"
+          );
+        }
+        const initialInput = objectValue(
+          block.input,
+          "content_block_start.content_block.input"
+        );
+        if (Object.keys(initialInput).length !== 0) {
+          throw new ConversionError(
+            "重复 tool_use 起始 input 必须为空对象",
+            "invalid_sse",
+            "content_block_start.content_block.input"
+          );
+        }
+        this.blocks.set(index, {
+          kind: "tool",
+          anthropicIndex: index,
+          outputIndex: canonical.outputIndex,
+          itemId,
+          name,
+          text: "",
+          initialInput,
+          duplicateOf: canonical.anthropicIndex,
+        });
+        return "";
       }
       this.seenItemIds.add(itemId);
       const initialInput = objectValue(
@@ -1312,6 +1444,7 @@ export class AnthropicToResponsesSseConverter {
       }
       this.reserveContent(delta.partial_json.length, "流式累计内容");
       state.text += delta.partial_json;
+      if (state.duplicateOf !== undefined) return "";
       return this.emit("response.function_call_arguments.delta", {
         item_id: state.itemId,
         output_index: state.outputIndex,
@@ -1340,6 +1473,13 @@ export class AnthropicToResponsesSseConverter {
     if (!state) throw new ConversionError(`找不到 content block ${index}`, "invalid_sse");
     this.blocks.delete(index);
     if (state.kind === "thinking") return "";
+    if (state.kind === "tool" && state.duplicateOf !== undefined) {
+      const args = state.text || JSON.stringify(state.initialInput ?? {});
+      const snapshots = this.stoppedToolSnapshots.get(state.itemId) ?? [];
+      snapshots.push(args);
+      this.stoppedToolSnapshots.set(state.itemId, snapshots);
+      return "";
+    }
     if (state.kind === "text") {
       const part = { type: "output_text", annotations: [], logprobs: [], text: state.text };
       const item = textItem(state.itemId, [state.text], "completed");

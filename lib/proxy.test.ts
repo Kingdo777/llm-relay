@@ -289,6 +289,59 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
   assert.match(mismatchError.error.message, /忽略 stream=false 并返回 SSE/);
   assert.equal(database.getLog(mismatched.logId!)?.status, "failed");
 
+  const routedStart =
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_pumped","type":"message","role":"assistant","model":"upstream-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":2,"output_tokens":0}}}\n\n';
+  const routedEnd =
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n' +
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}\n\n' +
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n' +
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}\n\n' +
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(routedStart));
+          queueMicrotask(() => {
+            controller.enqueue(encoder.encode(routedEnd));
+            controller.close();
+          });
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } }
+    );
+  const unconsumedRouted = await relayRequest(
+    llm,
+    {
+      clientProtocol: "openai-responses",
+      backendProtocol: "anthropic",
+      baseUrl: llm.anthropic_base_url,
+      routed: true,
+    },
+    "POST",
+    new Headers({ "content-type": "application/json" }),
+    JSON.stringify({
+      model: llm.alias,
+      input: "pump the stream",
+      store: false,
+      stream: true,
+    })
+  );
+  let pumpedLog = database.getLog(unconsumedRouted.logId!);
+  for (
+    let attempt = 0;
+    attempt < 50 && pumpedLog?.status === "streaming";
+    attempt += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    pumpedLog = database.getLog(unconsumedRouted.logId!);
+  }
+  assert.equal(pumpedLog?.status, "success");
+  assert.equal(pumpedLog?.status_code, 200);
+  assert.match(pumpedLog?.output ?? "", /response\.completed/);
+  await unconsumedRouted.response.body?.cancel();
+
   let directToolBody: Record<string, unknown> = {};
   globalThis.fetch = async (_input, init) => {
     directToolBody = JSON.parse(String(init?.body ?? "{}")) as Record<

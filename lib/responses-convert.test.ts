@@ -873,6 +873,201 @@ test("converts streamed tool argument deltas and validates the completed JSON", 
   });
 });
 
+test("recovers implicit EOF only for complete open tool calls", () => {
+  const converter = new AnthropicToResponsesSseConverter({ createdAt: 1 });
+  const source =
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_implicit_tools",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 4, output_tokens: 0 },
+      },
+    }) +
+    anthropicFrame("content_block_start", {
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: "call_a",
+        name: "alpha",
+        input: {},
+      },
+    }) +
+    anthropicFrame("content_block_delta", {
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: '{"x":1}' },
+    }) +
+    anthropicFrame("content_block_start", {
+      index: 1,
+      content_block: {
+        type: "tool_use",
+        id: "call_b",
+        name: "beta",
+        input: {},
+      },
+    }) +
+    anthropicFrame("content_block_delta", {
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: '{"y":2}' },
+    }) +
+    anthropicFrame("content_block_start", {
+      index: 2,
+      content_block: {
+        type: "tool_use",
+        id: "call_a",
+        name: "alpha",
+        input: {},
+      },
+    }) +
+    anthropicFrame("content_block_delta", {
+      index: 2,
+      delta: { type: "input_json_delta", partial_json: '{"x":1}' },
+    });
+  const output = converter.feed(source) + converter.finish();
+  const events = responseEvents(output);
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "response.output_item.done")
+      .map((event) => [event.item.name, event.item.arguments]),
+    [
+      ["alpha", '{"x":1}'],
+      ["beta", '{"y":2}'],
+    ]
+  );
+  assert.equal(events.at(-1)?.type, "response.completed");
+
+  const conflicting = new AnthropicToResponsesSseConverter();
+  conflicting.feed(
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_conflicting_snapshots",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    }) +
+      anthropicFrame("content_block_start", {
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_conflict",
+          name: "conflict",
+          input: {},
+        },
+      }) +
+      anthropicFrame("content_block_delta", {
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"x":1}' },
+      }) +
+      anthropicFrame("content_block_start", {
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "call_conflict",
+          name: "conflict",
+          input: {},
+        },
+      }) +
+      anthropicFrame("content_block_delta", {
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"x":2}' },
+      })
+  );
+  assert.throws(() => conflicting.finish(), /参数快照冲突/);
+
+  const partial = new AnthropicToResponsesSseConverter();
+  partial.feed(
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_partial_tool",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    }) +
+      anthropicFrame("content_block_start", {
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_partial",
+          name: "partial",
+          input: {},
+        },
+      }) +
+      anthropicFrame("content_block_delta", {
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"x":' },
+      })
+  );
+  assert.throws(() => partial.finish(), /合法 JSON/);
+});
+
+test("recovers a missing message terminal after explicitly closed content", () => {
+  const converter = new AnthropicToResponsesSseConverter({ createdAt: 1 });
+  const output =
+    converter.feed(
+      anthropicFrame("message_start", {
+        message: {
+          id: "msg_closed_text_eof",
+          model: "m",
+          content: [],
+          usage: { input_tokens: 2, output_tokens: 1 },
+        },
+      }) +
+        anthropicFrame("content_block_start", {
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }) +
+        anthropicFrame("content_block_delta", {
+          index: 0,
+          delta: { type: "text_delta", text: "complete" },
+        }) +
+        anthropicFrame("content_block_stop", { index: 0 })
+    ) + converter.finish();
+  const events = responseEvents(output);
+  assert.equal(events.at(-1)?.type, "response.completed");
+  assert.equal(events.at(-1)?.response.output[0].content[0].text, "complete");
+
+  const openText = new AnthropicToResponsesSseConverter();
+  const recoveredOpenText =
+    openText.feed(
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_open_text_eof",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    }) +
+      anthropicFrame("content_block_start", {
+        index: 0,
+        content_block: { type: "text", text: "" },
+      }) +
+      anthropicFrame("content_block_delta", {
+        index: 0,
+        delta: { type: "text_delta", text: "truncated" },
+      })
+    ) + openText.finish();
+  assert.equal(responseEvents(recoveredOpenText).at(-1)?.type, "response.completed");
+
+  const emptyOpenText = new AnthropicToResponsesSseConverter();
+  emptyOpenText.feed(
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_empty_open_text_eof",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    }) +
+      anthropicFrame("content_block_start", {
+        index: 0,
+        content_block: { type: "text", text: "" },
+      })
+  );
+  assert.throws(() => emptyOpenText.finish(), /message_stop/);
+});
+
 test("rejects an invalid completed tool JSON stream", () => {
   const converter = new AnthropicToResponsesSseConverter();
   converter.feed(anthropicFrame("message_start", {
