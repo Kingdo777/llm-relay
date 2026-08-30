@@ -318,6 +318,18 @@ test("Anthropic request -> OpenAI ignores non-semantic timestamp metadata", () =
   assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
 });
 
+test("Anthropic request -> OpenAI accepts and ignores thinking config", () => {
+  const converted = convertAnthropicRequestToOpenAIChat({
+    model: "claude-model",
+    max_tokens: 32,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "enabled", budget_tokens: 1024 },
+  });
+
+  assert.equal(converted.thinking, undefined);
+  assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
+});
+
 test("request conversion fails explicitly on unknown semantic fields and blocks", () => {
   assert.throws(
     () =>

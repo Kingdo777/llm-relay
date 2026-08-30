@@ -600,6 +600,8 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       "tools",
       "tool_choice",
       "metadata",
+      // Anthropic 扩展思考配置在 Chat 中没有稳定等价项；兼容路由时忽略。
+      "thinking",
       // 部分 Anthropic 兼容客户端附带的追踪元数据，不影响生成语义；
       // OpenAI Chat 没有对应字段，按兼容约定安全忽略。
       "request_timestamp",
