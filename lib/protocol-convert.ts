@@ -1099,6 +1099,7 @@ export function convertAnthropicResponseToOpenAIChat(
     fail(ANT_TO_OAI, "$response.role", "Expected assistant response role");
   }
   const textParts: string[] = [];
+  const reasoningParts: string[] = [];
   const toolCalls: JsonObject[] = [];
   arrayAt(response.content, ANT_TO_OAI, "$response.content").forEach(
     (rawBlock, index) => {
@@ -1106,6 +1107,13 @@ export function convertAnthropicResponseToOpenAIChat(
       const block = objectAt(rawBlock, ANT_TO_OAI, path);
       if (block.type === "text") {
         textParts.push(stringAt(block.text, ANT_TO_OAI, `${path}.text`));
+      } else if (block.type === "thinking") {
+        reasoningParts.push(
+          stringAt(block.thinking, ANT_TO_OAI, `${path}.thinking`)
+        );
+      } else if (block.type === "redacted_thinking") {
+        // OpenAI Chat has no representation for encrypted/redacted reasoning.
+        // Keep accepting the block without exposing its opaque payload.
       } else if (block.type === "tool_use") {
         toolCalls.push({
           id: stringAt(block.id, ANT_TO_OAI, `${path}.id`, false),
@@ -1128,6 +1136,9 @@ export function convertAnthropicResponseToOpenAIChat(
     role: "assistant",
     content: textParts.length > 0 ? textParts.join("") : null,
   };
+  if (reasoningParts.length > 0) {
+    message.reasoning_content = reasoningParts.join("");
+  }
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
   const rawUsage = objectAt(response.usage, ANT_TO_OAI, "$response.usage");
   if (rawUsage.input_tokens === undefined || rawUsage.input_tokens === null) {
@@ -1344,7 +1355,7 @@ function anthropicSse(event: string, data: JsonObject): string {
 }
 
 interface AnthropicStreamBlock {
-  kind: "text" | "tool";
+  kind: "text" | "tool" | "thinking" | "redacted_thinking";
   toolIndex?: number;
   arguments: string;
   stopped: boolean;
@@ -1526,6 +1537,29 @@ export class AnthropicToOpenAIStreamConverter {
       this.blocks.set(index, { kind: "text", arguments: "", stopped: false });
       return text === "" ? "" : this.chunk({ content: text }, null);
     }
+    if (content.type === "thinking") {
+      const thinking = stringAt(
+        content.thinking,
+        ANT_TO_OAI,
+        "$stream.content_block_start.content_block.thinking"
+      );
+      this.blocks.set(index, {
+        kind: "thinking",
+        arguments: "",
+        stopped: false,
+      });
+      return thinking === ""
+        ? ""
+        : this.chunk({ reasoning_content: thinking }, null);
+    }
+    if (content.type === "redacted_thinking") {
+      this.blocks.set(index, {
+        kind: "redacted_thinking",
+        arguments: "",
+        stopped: false,
+      });
+      return "";
+    }
     if (content.type === "tool_use") {
       const toolIndex = this.nextToolIndex++;
       const initialArguments = stringifyToolInput(
@@ -1603,6 +1637,26 @@ export class AnthropicToOpenAIStreamConverter {
         },
         null
       );
+    }
+    if (delta.type === "thinking_delta" && block.kind === "thinking") {
+      return this.chunk(
+        {
+          reasoning_content: stringAt(
+            delta.thinking,
+            ANT_TO_OAI,
+            "$stream.content_block_delta.delta.thinking"
+          ),
+        },
+        null
+      );
+    }
+    if (delta.type === "signature_delta" && block.kind === "thinking") {
+      stringAt(
+        delta.signature,
+        ANT_TO_OAI,
+        "$stream.content_block_delta.delta.signature"
+      );
+      return "";
     }
     if (delta.type === "input_json_delta" && block.kind === "tool") {
       const partial = stringAt(

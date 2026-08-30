@@ -877,6 +877,13 @@ export function convertAnthropicResponseToResponses(
       pendingTexts.push(block.text);
       return;
     }
+    // OpenAI Responses has no lossless equivalent for Anthropic's private
+    // chain-of-thought blocks.  They are deliberately omitted from the client
+    // response while the surrounding visible text, tools and usage continue
+    // to be converted normally.
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
+      return;
+    }
     flushText();
     if (block.type === "tool_use") {
       if (!optionalObject(block.input)) {
@@ -918,7 +925,7 @@ export function convertAnthropicResponseToResponses(
 }
 
 type StreamItem = {
-  kind: "text" | "tool";
+  kind: "text" | "tool" | "thinking";
   anthropicIndex: number;
   outputIndex: number;
   itemId: string;
@@ -1256,6 +1263,19 @@ export class AnthropicToResponsesSseConverter {
       this.output.push(item);
       return this.emit("response.output_item.added", { output_index: outputIndex, item });
     }
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
+      // Keep an explicit state entry even though no Responses output item is
+      // emitted.  Anthropic still sends start/delta/stop events for thinking,
+      // so retaining the block is necessary to enforce the normal lifecycle.
+      this.blocks.set(index, {
+        kind: "thinking",
+        anthropicIndex: index,
+        outputIndex: -1,
+        itemId: "",
+        text: "",
+      });
+      return "";
+    }
     throw new ConversionError(
       `Anthropic content ${String(block.type ?? "未知")} 无 Responses 流式等价项`,
       "unsupported_anthropic_content"
@@ -1267,6 +1287,14 @@ export class AnthropicToResponsesSseConverter {
     const state = this.blocks.get(index);
     if (!state) throw new ConversionError(`找不到 content block ${index}`, "invalid_sse");
     const delta = objectValue(payload.delta, "content_block_delta.delta");
+    if (
+      state.kind === "thinking" &&
+      (delta.type === "thinking_delta" || delta.type === "signature_delta")
+    ) {
+      // Reasoning and its signature are intentionally private in this route.
+      // Consume their lifecycle frames without retaining or exposing them.
+      return "";
+    }
     if (state.kind === "text" && delta.type === "text_delta" && typeof delta.text === "string") {
       if (state.text.length + delta.text.length > MAX_STREAM_CONTENT) {
         throw new ConversionError("流式文本超过 4 MiB 限制", "stream_too_large");
@@ -1308,6 +1336,7 @@ export class AnthropicToResponsesSseConverter {
     const state = this.blocks.get(index);
     if (!state) throw new ConversionError(`找不到 content block ${index}`, "invalid_sse");
     this.blocks.delete(index);
+    if (state.kind === "thinking") return "";
     if (state.kind === "text") {
       const part = { type: "output_text", annotations: [], logprobs: [], text: state.text };
       const item = textItem(state.itemId, [state.text], "completed");

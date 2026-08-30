@@ -390,6 +390,57 @@ test("converts non-streaming Anthropic text, tools, usage and cache details", ()
   assert.deepEqual(response.metadata, { trace: "x" });
 });
 
+test("ignores Anthropic thinking blocks while preserving visible Responses output", () => {
+  const response = convertAnthropicResponseToResponses({
+    id: "msg_reasoning",
+    type: "message",
+    role: "assistant",
+    model: "claude-reasoning",
+    content: [
+      { type: "thinking", thinking: "private reasoning", signature: "sig_1" },
+      { type: "text", text: "Visible answer" },
+      { type: "redacted_thinking", data: "encrypted-private-data" },
+      { type: "tool_use", id: "toolu_reasoning", name: "lookup", input: { q: "x" } },
+    ],
+    stop_reason: "tool_use",
+    usage: {
+      input_tokens: 2,
+      output_tokens: 5,
+      output_tokens_details: { thinking_tokens: 3 },
+    },
+  });
+
+  assert.deepEqual(response.output, [
+    {
+      id: "msg_reasoning",
+      type: "message",
+      status: "completed",
+      role: "assistant",
+      content: [{
+        type: "output_text",
+        annotations: [],
+        logprobs: [],
+        text: "Visible answer",
+      }],
+    },
+    {
+      id: "toolu_reasoning",
+      type: "function_call",
+      status: "completed",
+      call_id: "toolu_reasoning",
+      name: "lookup",
+      arguments: '{"q":"x"}',
+    },
+  ]);
+  assert.deepEqual(response.usage, {
+    input_tokens: 2,
+    input_tokens_details: { cached_tokens: 0 },
+    output_tokens: 5,
+    output_tokens_details: { reasoning_tokens: 3 },
+    total_tokens: 7,
+  });
+});
+
 test("ignores unknown Anthropic response extensions at every converted level", () => {
   const response = convertAnthropicResponseToResponses({
     id: "msg_extensions",
@@ -567,6 +618,91 @@ test("converts Anthropic text SSE fed one UTF-8 byte at a time", () => {
     total_tokens: 13,
   });
   assert.deepEqual(events.map((event) => event.sequence_number), events.map((_, index) => index));
+});
+
+test("consumes streamed thinking lifecycles without hiding text, tools or usage", () => {
+  const input = [
+    anthropicFrame("message_start", {
+      message: {
+        id: "msg_stream_reasoning",
+        model: "claude-reasoning",
+        content: [],
+        usage: { input_tokens: 2, output_tokens: 0 },
+      },
+    }),
+    anthropicFrame("content_block_start", {
+      index: 0,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    }),
+    anthropicFrame("content_block_delta", {
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "private reasoning" },
+    }),
+    anthropicFrame("content_block_delta", {
+      index: 0,
+      delta: { type: "signature_delta", signature: "sig_1" },
+    }),
+    anthropicFrame("content_block_stop", { index: 0 }),
+    anthropicFrame("content_block_start", {
+      index: 1,
+      content_block: { type: "redacted_thinking", data: "encrypted-private-data" },
+    }),
+    anthropicFrame("content_block_stop", { index: 1 }),
+    anthropicFrame("content_block_start", {
+      index: 2,
+      content_block: { type: "text", text: "" },
+    }),
+    anthropicFrame("content_block_delta", {
+      index: 2,
+      delta: { type: "text_delta", text: "Visible answer" },
+    }),
+    anthropicFrame("content_block_stop", { index: 2 }),
+    anthropicFrame("content_block_start", {
+      index: 3,
+      content_block: { type: "tool_use", id: "toolu_stream_reasoning", name: "lookup", input: {} },
+    }),
+    anthropicFrame("content_block_delta", {
+      index: 3,
+      delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
+    }),
+    anthropicFrame("content_block_stop", { index: 3 }),
+    anthropicFrame("message_delta", {
+      delta: { stop_reason: "tool_use" },
+      usage: {
+        output_tokens: 5,
+        output_tokens_details: { thinking_tokens: 3 },
+      },
+    }),
+    anthropicFrame("message_stop", {}),
+  ].join("");
+
+  const converter = new AnthropicToResponsesSseConverter({ createdAt: 60 });
+  const events = responseEvents(converter.feed(input) + converter.finish());
+  assert.deepEqual(events.map((event) => event.type), [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.content_part.done",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+    "response.completed",
+  ]);
+  const completed = events.at(-1)?.response;
+  assert.equal(completed.output[0].content[0].text, "Visible answer");
+  assert.equal(completed.output[1].arguments, '{"q":"x"}');
+  assert.deepEqual(completed.usage, {
+    input_tokens: 2,
+    input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+    output_tokens: 5,
+    output_tokens_details: { reasoning_tokens: 3 },
+    total_tokens: 7,
+  });
 });
 
 test("ignores unknown Anthropic SSE extensions without relaxing lifecycle checks", () => {

@@ -648,6 +648,30 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
   assert.equal(throughStringApi.model, "fallback");
 });
 
+test("Anthropic response -> OpenAI maps thinking and ignores redacted thinking", () => {
+  const converted = convertAnthropicResponseToOpenAIChat({
+    id: "msg_thinking",
+    type: "message",
+    role: "assistant",
+    model: "claude",
+    content: [
+      { type: "thinking", thinking: "first ", signature: "opaque-signature" },
+      { type: "redacted_thinking", data: "opaque-redacted-data" },
+      { type: "thinking", thinking: "second" },
+      { type: "text", text: "answer" },
+    ],
+    stop_reason: "end_turn",
+    usage: { input_tokens: 2, output_tokens: 3 },
+  });
+
+  const choice = (converted.choices as Array<Record<string, unknown>>)[0];
+  assert.deepEqual(choice.message, {
+    role: "assistant",
+    content: "answer",
+    reasoning_content: "first second",
+  });
+});
+
 test("non-streaming responses reject lossy multi-choice, unknown blocks and invalid cache", () => {
   assert.throws(
     () =>
@@ -664,7 +688,7 @@ test("non-streaming responses reject lossy multi-choice, unknown blocks and inva
         id: "x",
         type: "message",
         role: "assistant",
-        content: [{ type: "thinking", thinking: "secret" }],
+        content: [{ type: "server_tool_use", id: "srv_1", name: "web_search" }],
         stop_reason: "end_turn",
         usage: { input_tokens: 1, output_tokens: 1 },
       }),
@@ -835,6 +859,133 @@ test("Anthropic SSE -> OpenAI streams tool argument fragments with stable tool i
     const fn = delta.function as Record<string, unknown>;
     return fn.arguments ?? "";
   }).join(""), '{"a":2}');
+});
+
+test("Anthropic SSE -> OpenAI maps thinking deltas and ignores signatures and redacted thinking", () => {
+  const converter = new AnthropicToOpenAIStreamConverter();
+  const source =
+    anthropicEvent("message_start", {
+      type: "message_start",
+      message: {
+        id: "msg_thinking_stream",
+        type: "message",
+        role: "assistant",
+        model: "claude",
+        content: [],
+        usage: { input_tokens: 2, output_tokens: 0 },
+      },
+    }) +
+    anthropicEvent("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "initial " },
+    }) +
+    anthropicEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "reasoning" },
+    }) +
+    anthropicEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "signature_delta", signature: "opaque-signature" },
+    }) +
+    anthropicEvent("content_block_stop", {
+      type: "content_block_stop",
+      index: 0,
+    }) +
+    anthropicEvent("content_block_start", {
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "redacted_thinking", data: "opaque-redacted-data" },
+    }) +
+    anthropicEvent("content_block_stop", {
+      type: "content_block_stop",
+      index: 1,
+    }) +
+    anthropicEvent("content_block_start", {
+      type: "content_block_start",
+      index: 2,
+      content_block: { type: "text", text: "" },
+    }) +
+    anthropicEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 2,
+      delta: { type: "text_delta", text: "answer" },
+    }) +
+    anthropicEvent("content_block_stop", {
+      type: "content_block_stop",
+      index: 2,
+    }) +
+    anthropicEvent("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: { output_tokens: 5 },
+    }) +
+    anthropicEvent("message_stop", { type: "message_stop" });
+
+  const output = converter.feed(source) + converter.finish();
+  const deltas = parseSse(output)
+    .map((event) => event.data)
+    .filter((data): data is Record<string, unknown> => typeof data === "object")
+    .flatMap((payload) => (payload.choices as Array<Record<string, unknown>>) ?? [])
+    .map((choice) => choice.delta as Record<string, unknown>);
+
+  assert.equal(
+    deltas.map((delta) => delta.reasoning_content ?? "").join(""),
+    "initial reasoning"
+  );
+  assert.equal(deltas.map((delta) => delta.content ?? "").join(""), "answer");
+  assert.equal(output.includes("opaque-signature"), false);
+  assert.equal(output.includes("opaque-redacted-data"), false);
+});
+
+test("Anthropic thinking SSE blocks keep strict delta and lifecycle validation", () => {
+  const wrongDelta = new AnthropicToOpenAIStreamConverter();
+  wrongDelta.feed(
+    anthropicEvent("message_start", {
+      type: "message_start",
+      message: { id: "m", model: "claude", usage: {} },
+    }) +
+      anthropicEvent("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      })
+  );
+  assert.throws(
+    () =>
+      wrongDelta.feed(
+        anthropicEvent("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "not-thinking" },
+        })
+      ),
+    /does not match its content block/
+  );
+
+  const unstopped = new AnthropicToOpenAIStreamConverter();
+  assert.throws(
+    () =>
+      unstopped.feed(
+        anthropicEvent("message_start", {
+          type: "message_start",
+          message: { id: "m", model: "claude", usage: {} },
+        }) +
+          anthropicEvent("content_block_start", {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "" },
+          }) +
+          anthropicEvent("message_delta", {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+          }) +
+          anthropicEvent("message_stop", { type: "message_stop" })
+      ),
+    /Content block 0 was not stopped/
+  );
 });
 
 test("Anthropic SSE parser does not emit incomplete events and rejects truncated streams", () => {
