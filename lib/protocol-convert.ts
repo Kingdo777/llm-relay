@@ -156,27 +156,6 @@ function parseToolArguments(
   return parseJsonObject(text, direction, path);
 }
 
-/**
- * Anthropic exposes explicit ephemeral prompt-cache breakpoints while OpenAI
- * Chat caching is automatic. Validate the known hint before consuming it so a
- * malformed or future cache mode is not silently ignored.
- */
-function consumeAnthropicCacheControl(value: unknown, path: string): void {
-  if (value === undefined || value === null) return;
-  const cache = objectAt(value, ANT_TO_OAI, path);
-  if (cache.type !== "ephemeral") {
-    fail(ANT_TO_OAI, `${path}.type`, `Unsupported cache type \"${String(cache.type)}\"`);
-  }
-  if (isPresent(cache.ttl) && cache.ttl !== "5m" && cache.ttl !== "1h") {
-    fail(ANT_TO_OAI, `${path}.ttl`, `Unsupported cache TTL \"${String(cache.ttl)}\"`);
-  }
-  fail(
-    ANT_TO_OAI,
-    path,
-    "Anthropic cache_control 在 OpenAI Chat 中没有等价语义"
-  );
-}
-
 function textFromOpenAIContent(
   value: unknown,
   direction: ConversionDirection,
@@ -220,7 +199,6 @@ function textFromAnthropicBlocks(
           `Unsupported Anthropic text block type \"${String(block.type)}\"`
         );
       }
-      consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
       return stringAt(block.text, direction, `${blockPath}.text`);
     })
     .join("");
@@ -244,7 +222,6 @@ function anthropicToolResultText(
           `Unsupported tool result block type \"${String(block.type)}\"`
         );
       }
-      consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
       return stringAt(block.text, direction, `${blockPath}.text`);
     })
     .join("");
@@ -590,10 +567,8 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
           const blockPath = `${path}.content[${blockIndex}]`;
           const block = objectAt(rawBlock, ANT_TO_OAI, blockPath);
           if (block.type === "text") {
-            consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
             text.push(stringAt(block.text, ANT_TO_OAI, `${blockPath}.text`));
           } else if (block.type === "tool_use") {
-            consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
             toolCalls.push({
               id: stringAt(block.id, ANT_TO_OAI, `${blockPath}.id`, false),
               type: "function",
@@ -636,7 +611,6 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
         const blockPath = `${path}.content[${blockIndex}]`;
         const block = objectAt(rawBlock, ANT_TO_OAI, blockPath);
         if (block.type === "text") {
-          consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
           const blockText = stringAt(block.text, ANT_TO_OAI, `${blockPath}.text`);
           pendingText += blockText;
           if (blockText !== "") sawText = true;
@@ -657,7 +631,6 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
               );
             }
           }
-          consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
           if (sawText) {
             fail(
               ANT_TO_OAI,
@@ -701,7 +674,6 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       (rawTool, index) => {
         const path = `$request.tools[${index}]`;
         const tool = objectAt(rawTool, ANT_TO_OAI, path);
-        consumeAnthropicCacheControl(tool.cache_control, `${path}.cache_control`);
         const fn: JsonObject = {
           name: stringAt(tool.name, ANT_TO_OAI, `${path}.name`, false),
           parameters:

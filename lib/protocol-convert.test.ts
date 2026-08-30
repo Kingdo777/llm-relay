@@ -387,22 +387,22 @@ test("request conversion ignores unknown extensions but still rejects invalid co
       }),
     ConversionError
   );
-  assert.throws(
-    () =>
-      convertAnthropicRequestToOpenAIChat({
-        model: "m",
-        max_tokens: 10,
-        system: [
-          {
-            type: "text",
-            text: "cached",
-            cache_control: { type: "ephemeral", ttl: "1h" },
-          },
-        ],
-        messages: [{ role: "user", content: "hi" }],
-      }),
-    /cache_control.*没有等价语义/
-  );
+  const cached = convertAnthropicRequestToOpenAIChat({
+    model: "m",
+    max_tokens: 10,
+    system: [
+      {
+        type: "text",
+        text: "cached",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.deepEqual((cached.messages as unknown[])[0], {
+    role: "system",
+    content: "cached",
+  });
   assert.throws(
     () =>
       convertAnthropicRequestToOpenAIChat({
