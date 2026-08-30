@@ -304,6 +304,24 @@ test("Anthropic request -> OpenAI explicitly preserves non-streaming mode", () =
   assert.equal(converted.stream_options, undefined);
 });
 
+test("Anthropic request -> OpenAI normalizes case-insensitive message roles", () => {
+  const converted = convertAnthropicRequestToOpenAIChat({
+    model: "claude-model",
+    max_tokens: 32,
+    messages: [
+      { role: "System", content: "System instruction" },
+      { role: "USER", content: "Question" },
+      { role: "Assistant", content: "Answer" },
+    ],
+  });
+
+  assert.deepEqual(converted.messages, [
+    { role: "system", content: "System instruction" },
+    { role: "user", content: "Question" },
+    { role: "assistant", content: "Answer" },
+  ]);
+});
+
 test("Anthropic request -> OpenAI ignores non-semantic timestamp metadata", () => {
   const converted = convertAnthropicRequestToOpenAIChat({
     model: "claude-model",

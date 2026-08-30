@@ -551,10 +551,27 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
     (rawMessage, messageIndex) => {
       const path = `$request.messages[${messageIndex}]`;
       const message = objectAt(rawMessage, ANT_TO_OAI, path);
-      const role = stringAt(message.role, ANT_TO_OAI, `${path}.role`, false);
-      if (role !== "user" && role !== "assistant") {
-        fail(ANT_TO_OAI, `${path}.role`, `Unsupported Anthropic message role \"${role}\"`);
+      const rawRole = stringAt(message.role, ANT_TO_OAI, `${path}.role`, false);
+      const normalizedRole = rawRole.trim().toLowerCase();
+      if (normalizedRole === "system") {
+        messages.push({
+          role: "system",
+          content: textFromAnthropicBlocks(
+            message.content,
+            ANT_TO_OAI,
+            `${path}.content`
+          ),
+        });
+        return;
       }
+      if (normalizedRole !== "user" && normalizedRole !== "assistant") {
+        fail(
+          ANT_TO_OAI,
+          `${path}.role`,
+          `Unsupported Anthropic message role \"${rawRole}\"`
+        );
+      }
+      const role = normalizedRole as "user" | "assistant";
       if (typeof message.content === "string") {
         messages.push({ role, content: message.content });
         return;
