@@ -47,23 +47,6 @@ function objectValue(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function assertAllowedKeys(
-  value: JsonObject,
-  allowed: readonly string[],
-  field: string
-): void {
-  const allowedSet = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!allowedSet.has(key)) {
-      throw new ConversionError(
-        `${field}.${key} 无 Anthropic 等价语义`,
-        "unsupported_responses_feature",
-        `${field}.${key}`
-      );
-    }
-  }
-}
-
 function optionalObject(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonObject
@@ -94,27 +77,6 @@ function contentToTextBlocks(content: unknown, field: string): JsonObject[] {
       (block.type === "input_text" || block.type === "output_text" || block.type === "text") &&
       typeof block.text === "string"
     ) {
-      if (block.type === "output_text") {
-        assertAllowedKeys(
-          block,
-          ["type", "text", "annotations", "logprobs"],
-          `${field}[${index}]`
-        );
-        for (const metadata of ["annotations", "logprobs"] as const) {
-          if (
-            block[metadata] !== undefined &&
-            (!Array.isArray(block[metadata]) || block[metadata].length !== 0)
-          ) {
-            throw new ConversionError(
-              `${field}[${index}].${metadata} 无 Anthropic 等价语义`,
-              "unsupported_content",
-              `${field}[${index}].${metadata}`
-            );
-          }
-        }
-      } else {
-        assertAllowedKeys(block, ["type", "text"], `${field}[${index}]`);
-      }
       return { type: "text", text: block.text };
     }
     throw new ConversionError(
@@ -162,11 +124,6 @@ function mapResponsesTools(value: unknown): JsonObject[] | undefined {
   const names = new Set<string>();
   return value.map((raw, index) => {
     const tool = objectValue(raw, `tools[${index}]`);
-    assertAllowedKeys(
-      tool,
-      ["type", "name", "description", "parameters", "strict"],
-      `tools[${index}]`
-    );
     if (tool.type !== "function") {
       throw new ConversionError(
         `Responses 托管工具 ${String(tool.type ?? "未知")} 无法路由到 Anthropic；仅支持自定义 function`,
@@ -231,7 +188,6 @@ function mapToolChoice(value: unknown, parallel: unknown): JsonObject | undefine
   else if (value === "required") result = { type: "any" };
   else {
     const choice = objectValue(value, "tool_choice");
-    assertAllowedKeys(choice, ["type", "name"], "tool_choice");
     if (choice.type !== "function") {
       throw new ConversionError(
         `tool_choice ${String(choice.type ?? "未知")} 无法转换`,
@@ -305,7 +261,6 @@ function instructionsToSystem(value: unknown, field: string): JsonObject[] {
   const blocks: JsonObject[] = [];
   value.forEach((raw, index) => {
     const item = objectValue(raw, `${field}[${index}]`);
-    assertAllowedKeys(item, ["type", "role", "content"], `${field}[${index}]`);
     if (item.type !== undefined && item.type !== "message") {
       throw new ConversionError(
         `${field}[${index}].type 必须是 message`,
@@ -332,34 +287,11 @@ export function convertResponsesRequestToAnthropic(
   options: Pick<ResponsesConversionOptions, "defaultMaxTokens" | "model"> = {}
 ): JsonObject {
   const body = objectValue(value, "Responses 请求");
-  assertAllowedKeys(
-    body,
-    [
-      "model", "input", "instructions", "max_output_tokens", "tools",
-      "tool_choice", "parallel_tool_calls", "stream", "temperature", "top_p",
-      "stop", "user", "safety_identifier", "text", "previous_response_id",
-      "conversation", "prompt", "background", "max_tool_calls", "store",
-      "include", "reasoning", "truncation", "service_tier", "prompt_cache_key",
-      "top_logprobs", "logprobs", "metadata", "context_management",
-      "prompt_cache_retention", "prompt_cache_options", "stream_options",
-    ],
-    "request"
-  );
   rejectField(body, "previous_response_id", "previous_response_id 依赖 OpenAI 服务端状态，无法转换");
   rejectField(body, "conversation", "conversation 依赖 OpenAI 服务端会话，无法转换");
   rejectField(body, "prompt", "托管 prompt/template 无法转换");
   rejectField(body, "background", "background Responses 无法转换");
-  rejectField(body, "max_tool_calls", "max_tool_calls 无 Anthropic 等价语义");
   rejectField(body, "store", "store=true 的服务端存储语义无法转换");
-  rejectField(body, "include", "include 请求的托管输出无法转换");
-  rejectField(body, "prompt_cache_key", "prompt_cache_key 的 OpenAI 缓存路由语义无法转换");
-  rejectField(body, "top_logprobs", "top_logprobs 无 Anthropic Messages 等价输出");
-  rejectField(body, "logprobs", "logprobs 无 Anthropic Messages 等价输出");
-  rejectField(body, "metadata", "metadata 无可靠的 Anthropic 等价语义");
-  rejectField(body, "context_management", "context_management 无 Anthropic 等价语义");
-  rejectField(body, "prompt_cache_retention", "prompt_cache_retention 无 Anthropic 等价语义");
-  rejectField(body, "prompt_cache_options", "prompt_cache_options 无 Anthropic 等价语义");
-  rejectField(body, "stream_options", "stream_options 无 Anthropic 等价语义");
   if (body.store !== false) {
     throw new ConversionError(
       "O→A 路由要求显式设置 store=false；Anthropic 不提供 Responses 服务端存储",
@@ -397,33 +329,14 @@ export function convertResponsesRequestToAnthropic(
       throw new ConversionError(`${field} 必须是非空字符串`, "invalid_payload", field);
     }
   }
-  if (body.truncation !== undefined && body.truncation !== null && body.truncation !== "disabled") {
-    throw new ConversionError("truncation=auto 无可靠的 Anthropic 等价语义", "unsupported_responses_feature", "truncation");
-  }
-  if (
-    body.service_tier !== undefined && body.service_tier !== null &&
-    body.service_tier !== "auto" && body.service_tier !== "default"
-  ) {
-    throw new ConversionError("指定的 service_tier 无可靠的 Anthropic 等价语义", "unsupported_responses_feature", "service_tier");
-  }
-  if (body.reasoning !== undefined && body.reasoning !== null) {
-    throw new ConversionError("reasoning 配置无可靠的 Anthropic 等价语义", "unsupported_responses_feature", "reasoning");
-  }
   const textConfig = optionalObject(body.text);
   if (body.text !== undefined && body.text !== null && !textConfig) {
     throw new ConversionError("text 必须是对象", "invalid_payload", "text");
-  }
-  if (textConfig?.verbosity !== undefined && textConfig.verbosity !== null) {
-    throw new ConversionError("text.verbosity 无可靠的 Anthropic 等价语义", "unsupported_responses_feature", "text.verbosity");
-  }
-  if (textConfig) {
-    assertAllowedKeys(textConfig, ["format", "verbosity"], "text");
   }
   const format = optionalObject(textConfig?.format);
   if (textConfig?.format !== undefined && textConfig.format !== null && !format) {
     throw new ConversionError("text.format 必须是对象", "invalid_payload", "text.format");
   }
-  if (format) assertAllowedKeys(format, ["type"], "text.format");
   if (format && format.type !== "text") {
     throw new ConversionError("结构化 text.format 无法转换", "unsupported_responses_feature", "text.format");
   }
@@ -457,11 +370,6 @@ export function convertResponsesRequestToAnthropic(
     const item = objectValue(raw, `input[${index}]`);
     const type = item.type ?? (item.role ? "message" : undefined);
     if (type === "message") {
-      assertAllowedKeys(
-        item,
-        ["type", "role", "content", "status", "id"],
-        `input[${index}]`
-      );
       const role = requiredString(item.role, `input[${index}].role`);
       assertCompletedStatus(item.status, `input[${index}].status`);
       const blocks = contentToTextBlocks(item.content, `input[${index}].content`);
@@ -488,11 +396,6 @@ export function convertResponsesRequestToAnthropic(
       return;
     }
     if (type === "function_call") {
-      assertAllowedKeys(
-        item,
-        ["type", "id", "call_id", "name", "arguments", "status"],
-        `input[${index}]`
-      );
       const callId = requiredString(item.call_id ?? item.id, `input[${index}].call_id`);
       assertCompletedStatus(item.status, `input[${index}].status`);
       if (seenCalls.has(callId)) {
@@ -513,11 +416,6 @@ export function convertResponsesRequestToAnthropic(
       return;
     }
     if (type === "function_call_output") {
-      assertAllowedKeys(
-        item,
-        ["type", "id", "call_id", "output", "status"],
-        `input[${index}]`
-      );
       const callId = requiredString(item.call_id, `input[${index}].call_id`);
       if (!seenCalls.has(callId)) {
         throw new ConversionError(
@@ -654,15 +552,6 @@ function streamIndex(value: unknown, field: string): number {
 
 function responseUsage(value: unknown): JsonObject {
   const usage = objectValue(value, "usage");
-  assertAllowedKeys(
-    usage,
-    [
-      "input_tokens", "output_tokens", "cache_creation_input_tokens",
-      "cache_read_input_tokens", "cache_creation", "output_tokens_details",
-      "billing_usage", "server_tool_use", "service_tier", "inference_geo",
-    ],
-    "usage"
-  );
   const billingContainer = optionalObject(usage.billing_usage);
   if (
     usage.billing_usage !== undefined &&
@@ -676,24 +565,18 @@ function responseUsage(value: unknown): JsonObject {
     );
   }
   const billing = optionalObject(billingContainer?.openai_usage);
-  if (billingContainer && !billing) {
+  if (
+    billingContainer?.openai_usage !== undefined &&
+    billingContainer.openai_usage !== null &&
+    !billing
+  ) {
     throw new ConversionError(
-      "usage.billing_usage.openai_usage 缺失或无效",
+      "usage.billing_usage.openai_usage 必须是对象",
       "invalid_usage",
       "usage.billing_usage.openai_usage"
     );
   }
   if (billing) {
-    assertAllowedKeys(billingContainer!, ["openai_usage"], "usage.billing_usage");
-    assertAllowedKeys(
-      billing,
-      [
-        "prompt_tokens", "input_tokens", "completion_tokens", "output_tokens",
-        "total_tokens", "prompt_tokens_details", "input_tokens_details",
-        "completion_tokens_details", "output_tokens_details",
-      ],
-      "usage.billing_usage.openai_usage"
-    );
     if (
       billing.prompt_tokens !== undefined &&
       billing.input_tokens !== undefined &&
@@ -735,13 +618,6 @@ function responseUsage(value: unknown): JsonObject {
         "usage.billing_usage.openai_usage.prompt_tokens_details"
       );
     }
-    if (details) {
-      assertAllowedKeys(
-        details,
-        ["cached_tokens", "cache_write_tokens"],
-        "usage.billing_usage.openai_usage.prompt_tokens_details"
-      );
-    }
     const cached = details?.cached_tokens === undefined
       ? 0
       : usageInteger(
@@ -772,13 +648,6 @@ function responseUsage(value: unknown): JsonObject {
       throw new ConversionError(
         "OpenAI billing completion_tokens_details 必须是对象",
         "invalid_usage",
-        "usage.billing_usage.openai_usage.completion_tokens_details"
-      );
-    }
-    if (outputDetails) {
-      assertAllowedKeys(
-        outputDetails,
-        ["reasoning_tokens"],
         "usage.billing_usage.openai_usage.completion_tokens_details"
       );
     }
@@ -847,11 +716,6 @@ function responseUsage(value: unknown): JsonObject {
   }
   let cacheCreationBreakdown = 0;
   if (cacheCreationDetails) {
-    assertAllowedKeys(
-      cacheCreationDetails,
-      ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"],
-      "usage.cache_creation"
-    );
     for (const key of ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"] as const) {
       if (cacheCreationDetails[key] !== undefined) {
         cacheCreationBreakdown += usageInteger(
@@ -883,9 +747,6 @@ function responseUsage(value: unknown): JsonObject {
       "invalid_usage",
       "usage.output_tokens_details"
     );
-  }
-  if (outputDetails) {
-    assertAllowedKeys(outputDetails, ["thinking_tokens"], "usage.output_tokens_details");
   }
   const reasoningTokens = outputDetails?.thinking_tokens === undefined
     ? 0
@@ -976,15 +837,6 @@ export function convertAnthropicResponseToResponses(
   options: ResponsesConversionOptions = {}
 ): JsonObject {
   const message = objectValue(value, "Anthropic 响应");
-  assertAllowedKeys(
-    message,
-    [
-      "id", "type", "role", "model", "content", "stop_reason",
-      "stop_sequence", "usage", "container", "context_management",
-      "stop_details",
-    ],
-    "response"
-  );
   if (message.type !== "message") {
     throw new ConversionError("Anthropic response.type 必须是 message", "invalid_payload", "type");
   }
@@ -1022,17 +874,11 @@ export function convertAnthropicResponseToResponses(
   message.content.forEach((raw, index) => {
     const block = objectValue(raw, `content[${index}]`);
     if (block.type === "text" && typeof block.text === "string") {
-      assertAllowedKeys(block, ["type", "text"], `content[${index}]`);
       pendingTexts.push(block.text);
       return;
     }
     flushText();
     if (block.type === "tool_use") {
-      assertAllowedKeys(
-        block,
-        ["type", "id", "name", "input"],
-        `content[${index}]`
-      );
       if (!optionalObject(block.input)) {
         throw new ConversionError(
           `content[${index}].input 必须是对象`,
@@ -1276,7 +1122,6 @@ export class AnthropicToResponsesSseConverter {
       );
     }
     if (type === "ping") {
-      assertAllowedKeys(payload, ["type"], "ping");
       return "";
     }
     if (type === "message_start") return this.startMessage(payload);
@@ -1294,16 +1139,7 @@ export class AnthropicToResponsesSseConverter {
 
   private startMessage(payload: JsonObject): string {
     if (this.created) throw new ConversionError("重复的 message_start", "invalid_sse");
-    assertAllowedKeys(payload, ["type", "message"], "message_start");
     const message = objectValue(payload.message, "message_start.message");
-    assertAllowedKeys(
-      message,
-      [
-        "id", "type", "role", "model", "content", "stop_reason",
-        "stop_sequence", "usage", "container", "context_management",
-      ],
-      "message_start.message"
-    );
     if (message.type !== "message" || message.role !== "assistant") {
       throw new ConversionError(
         "message_start 必须包含 Anthropic assistant message",
@@ -1334,7 +1170,6 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private startBlock(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type", "index", "content_block"], "content_block_start");
     const index = streamIndex(payload.index, "content_block_start.index");
     if (this.seenBlockIndexes.has(index)) {
       throw new ConversionError(`重复的 content block ${index}`, "invalid_sse");
@@ -1346,7 +1181,6 @@ export class AnthropicToResponsesSseConverter {
       throw new ConversionError("流式输出项超过 256 个", "stream_too_large");
     }
     if (block.type === "text") {
-      assertAllowedKeys(block, ["type", "text"], "content_block_start.content_block");
       if (typeof block.text !== "string") {
         throw new ConversionError(
           "content_block_start.content_block.text 必须是字符串",
@@ -1383,11 +1217,6 @@ export class AnthropicToResponsesSseConverter {
       return out;
     }
     if (block.type === "tool_use") {
-      assertAllowedKeys(
-        block,
-        ["type", "id", "name", "input"],
-        "content_block_start.content_block"
-      );
       const itemId = requiredString(block.id, "content_block_start.content_block.id");
       if (this.seenItemIds.has(itemId)) {
         throw new ConversionError(`重复的输出 item id=${itemId}`, "invalid_sse");
@@ -1434,13 +1263,11 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private deltaBlock(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type", "index", "delta"], "content_block_delta");
     const index = streamIndex(payload.index, "content_block_delta.index");
     const state = this.blocks.get(index);
     if (!state) throw new ConversionError(`找不到 content block ${index}`, "invalid_sse");
     const delta = objectValue(payload.delta, "content_block_delta.delta");
     if (state.kind === "text" && delta.type === "text_delta" && typeof delta.text === "string") {
-      assertAllowedKeys(delta, ["type", "text"], "content_block_delta.delta");
       if (state.text.length + delta.text.length > MAX_STREAM_CONTENT) {
         throw new ConversionError("流式文本超过 4 MiB 限制", "stream_too_large");
       }
@@ -1449,11 +1276,6 @@ export class AnthropicToResponsesSseConverter {
       return this.textDelta(state, delta.text);
     }
     if (state.kind === "tool" && delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
-      assertAllowedKeys(
-        delta,
-        ["type", "partial_json"],
-        "content_block_delta.delta"
-      );
       if (state.text.length + delta.partial_json.length > MAX_STREAM_CONTENT) {
         throw new ConversionError("工具参数超过 4 MiB 限制", "stream_too_large");
       }
@@ -1482,7 +1304,6 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private stopBlock(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type", "index"], "content_block_stop");
     const index = streamIndex(payload.index, "content_block_stop.index");
     const state = this.blocks.get(index);
     if (!state) throw new ConversionError(`找不到 content block ${index}`, "invalid_sse");
@@ -1532,7 +1353,6 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private deltaMessage(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type", "delta", "usage"], "message_delta");
     if (this.blocks.size !== 0) {
       throw new ConversionError(
         "message_delta 出现在 content block 结束之前",
@@ -1540,7 +1360,6 @@ export class AnthropicToResponsesSseConverter {
       );
     }
     const delta = objectValue(payload.delta, "message_delta.delta");
-    assertAllowedKeys(delta, ["stop_reason", "stop_sequence"], "message_delta.delta");
     validateStopReason(delta.stop_reason, "message_delta.delta.stop_reason");
     if (delta.stop_reason === undefined || delta.stop_reason === null) {
       throw new ConversionError("message_delta 缺少 stop_reason", "invalid_sse");
@@ -1554,7 +1373,6 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private stopMessage(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type"], "message_stop");
     if (this.blocks.size) {
       throw new ConversionError("message_stop 时仍有未结束的 content block", "invalid_sse");
     }
@@ -1577,9 +1395,7 @@ export class AnthropicToResponsesSseConverter {
   }
 
   private failMessage(payload: JsonObject): string {
-    assertAllowedKeys(payload, ["type", "error"], "error");
     const upstream = objectValue(payload.error, "error.error");
-    assertAllowedKeys(upstream, ["type", "message"], "error.error");
     return this.failResponse(
       requiredString(upstream.type, "error.error.type"),
       requiredString(upstream.message, "error.error.message")
@@ -1607,15 +1423,6 @@ export class AnthropicToResponsesSseConverter {
     if (!usage) {
       throw new ConversionError("stream.usage 必须是对象", "invalid_usage", "stream.usage");
     }
-    assertAllowedKeys(
-      usage,
-      [
-        "input_tokens", "output_tokens", "cache_creation_input_tokens",
-        "cache_read_input_tokens", "cache_creation", "output_tokens_details",
-        "billing_usage", "server_tool_use", "service_tier", "inference_geo",
-      ],
-      "stream.usage"
-    );
     if (usage.billing_usage !== undefined && usage.billing_usage !== null) {
       const converted = responseUsage(usage);
       const input = usageInteger(converted.input_tokens, "stream.usage.input_tokens");
@@ -1700,11 +1507,6 @@ export class AnthropicToResponsesSseConverter {
       );
     }
     if (cacheCreationDetails) {
-      assertAllowedKeys(
-        cacheCreationDetails,
-        ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"],
-        "stream.usage.cache_creation"
-      );
       let breakdown = 0;
       for (const key of ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"] as const) {
         if (cacheCreationDetails[key] !== undefined) {
@@ -1739,11 +1541,6 @@ export class AnthropicToResponsesSseConverter {
       );
     }
     if (outputDetails) {
-      assertAllowedKeys(
-        outputDetails,
-        ["thinking_tokens"],
-        "stream.usage.output_tokens_details"
-      );
       if (outputDetails.thinking_tokens !== undefined) {
         const thinking = usageInteger(
           outputDetails.thinking_tokens,

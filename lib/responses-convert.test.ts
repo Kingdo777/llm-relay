@@ -159,7 +159,6 @@ test("rejects stateful Responses features, hosted tools and unsupported content"
     [{ model: "m", input: "x", store: false, prompt: { id: "pmpt_1" } }, "unsupported_responses_feature", "prompt"],
     [{ model: "m", input: "x", store: false, tools: [{ type: "web_search" }] }, "unsupported_hosted_tool", "tools[0]"],
     [{ model: "m", store: false, input: [{ role: "user", content: [{ type: "input_image", image_url: "x" }] }] }, "unsupported_content", "input[0].content[0]"],
-    [{ model: "m", input: "x", store: false, future_behavior: true }, "unsupported_responses_feature", "request.future_behavior"],
     [{ model: "m", input: "x", store: false, temperature: "hot" }, "invalid_payload", "temperature"],
     [{ model: "m", input: "x", store: false, tools: [{ type: "function", name: "f", parameters: [] }] }, "invalid_payload", "tools[0].parameters"],
   ];
@@ -170,6 +169,66 @@ test("rejects stateful Responses features, hosted tools and unsupported content"
       (error) => error instanceof ConversionError && error.code === code && error.field === field
     );
   }
+});
+
+test("ignores unknown request extensions and optional unmapped controls", () => {
+  const converted = convertResponsesRequestToAnthropic({
+    model: "m",
+    store: false,
+    future_behavior: { enabled: true },
+    max_tool_calls: 8,
+    include: ["message.output_text.logprobs"],
+    prompt_cache_key: "cache-key",
+    prompt_cache_retention: "24h",
+    prompt_cache_options: { vendor: true },
+    top_logprobs: 5,
+    logprobs: true,
+    metadata: { trace: "ignored upstream" },
+    context_management: { type: "compaction" },
+    stream_options: { include_usage: true },
+    truncation: "auto",
+    service_tier: "priority",
+    reasoning: { effort: "high" },
+    text: {
+      format: { type: "text", vendor_format_extension: true },
+      verbosity: "high",
+      vendor_text_extension: true,
+    },
+    instructions: [{
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "Be concise", vendor_block_extension: true }],
+      vendor_instruction_extension: true,
+    }],
+    input: [{
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello", vendor_block_extension: true }],
+      vendor_item_extension: true,
+    }],
+    tools: [{
+      type: "function",
+      name: "lookup",
+      parameters: { type: "object" },
+      vendor_tool_extension: true,
+    }],
+    tool_choice: {
+      type: "function",
+      name: "lookup",
+      vendor_choice_extension: true,
+    },
+  });
+
+  assert.deepEqual(converted.system, [{ type: "text", text: "Be concise" }]);
+  assert.deepEqual(converted.messages, [{
+    role: "user",
+    content: [{ type: "text", text: "hello" }],
+  }]);
+  assert.deepEqual(converted.tools, [{
+    name: "lookup",
+    input_schema: { type: "object" },
+  }]);
+  assert.deepEqual(converted.tool_choice, { type: "tool", name: "lookup" });
 });
 
 test("does not elevate non-system instructions messages", () => {
@@ -205,15 +264,8 @@ test("rejects malformed and orphan function items explicitly", () => {
   );
 });
 
-test("validates tool identity, status and nested tool choice fields", () => {
+test("validates tool identity, item status and message ordering", () => {
   const invalidBodies: RecordValue[] = [
-    {
-      model: "m",
-      store: false,
-      input: "x",
-      tools: [{ type: "function", name: "f" }],
-      tool_choice: { type: "function", name: "f", future: true },
-    },
     {
       model: "m",
       store: false,
@@ -336,6 +388,55 @@ test("converts non-streaming Anthropic text, tools, usage and cache details", ()
   });
   assert.equal(response.max_output_tokens, 100);
   assert.deepEqual(response.metadata, { trace: "x" });
+});
+
+test("ignores unknown Anthropic response extensions at every converted level", () => {
+  const response = convertAnthropicResponseToResponses({
+    id: "msg_extensions",
+    type: "message",
+    role: "assistant",
+    model: "m",
+    vendor_response_extension: true,
+    content: [
+      { type: "text", text: "ok", citations: [{ id: "ignored" }], vendor_block_extension: true },
+      {
+        type: "tool_use",
+        id: "toolu_extensions",
+        name: "lookup",
+        input: { q: "x" },
+        vendor_tool_extension: true,
+      },
+    ],
+    stop_reason: "tool_use",
+    usage: {
+      input_tokens: 1,
+      cache_creation_input_tokens: 2,
+      cache_read_input_tokens: 3,
+      output_tokens: 1,
+      vendor_usage_extension: 99,
+      billing_usage: { vendor_billing_extension: 99 },
+      cache_creation: {
+        ephemeral_1h_input_tokens: 2,
+        ephemeral_5m_input_tokens: 0,
+        vendor_cache_extension: 99,
+      },
+      output_tokens_details: {
+        thinking_tokens: 1,
+        vendor_output_extension: 99,
+      },
+    },
+  });
+
+  assert.equal(response.status, "completed");
+  assert.equal((response.output as RecordValue[])[0].content[0].text, "ok");
+  assert.equal((response.output as RecordValue[])[1].arguments, '{"q":"x"}');
+  assert.deepEqual(response.usage, {
+    input_tokens: 6,
+    input_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+    output_tokens: 1,
+    output_tokens_details: { reasoning_tokens: 1 },
+    total_tokens: 7,
+  });
 });
 
 test("maps Anthropic max_tokens to an incomplete Responses result", () => {
@@ -466,6 +567,52 @@ test("converts Anthropic text SSE fed one UTF-8 byte at a time", () => {
     total_tokens: 13,
   });
   assert.deepEqual(events.map((event) => event.sequence_number), events.map((_, index) => index));
+});
+
+test("ignores unknown Anthropic SSE extensions without relaxing lifecycle checks", () => {
+  const input = [
+    anthropicFrame("ping", { vendor_ping_extension: true }),
+    anthropicFrame("message_start", {
+      vendor_event_extension: true,
+      message: {
+        id: "msg_stream_extensions",
+        model: "m",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0, vendor_usage_extension: true },
+        vendor_message_extension: true,
+      },
+    }),
+    anthropicFrame("content_block_start", {
+      index: 0,
+      content_block: { type: "text", text: "", vendor_block_extension: true },
+      vendor_event_extension: true,
+    }),
+    anthropicFrame("content_block_delta", {
+      index: 0,
+      delta: { type: "text_delta", text: "ok", vendor_delta_extension: true },
+      vendor_event_extension: true,
+    }),
+    anthropicFrame("content_block_stop", { index: 0, vendor_event_extension: true }),
+    anthropicFrame("message_delta", {
+      delta: {
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        vendor_delta_extension: true,
+      },
+      usage: {
+        output_tokens: 1,
+        output_tokens_details: { thinking_tokens: 0, vendor_detail_extension: true },
+        vendor_usage_extension: true,
+      },
+      vendor_event_extension: true,
+    }),
+    anthropicFrame("message_stop", { vendor_event_extension: true }),
+  ].join("");
+
+  const converter = new AnthropicToResponsesSseConverter({ createdAt: 1 });
+  const events = responseEvents(converter.feed(input) + converter.finish());
+  assert.equal(events.at(-1)?.type, "response.completed");
+  assert.equal(events.at(-1)?.response.output[0].content[0].text, "ok");
 });
 
 test("converts streamed tool argument deltas and validates the completed JSON", () => {

@@ -1,10 +1,9 @@
 /**
  * OpenAI Chat Completions <-> Anthropic Messages conversion.
  *
- * This module intentionally fails closed. A field that changes model behaviour
- * must either be mapped here or cause ConversionError; it is never silently
- * discarded. Harmless response metadata (timestamps, fingerprints, etc.) is
- * allowed where noted below.
+ * Conversion is compatibility-first: known fields are converted while unknown
+ * vendor extensions are ignored. Core structures and values that are required
+ * for a meaningful conversion remain strictly validated.
  */
 
 export type JsonObject = Record<string, unknown>;
@@ -46,6 +45,10 @@ function fail(
 
 function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value !== undefined && value !== null;
 }
 
 function objectAt(
@@ -108,20 +111,6 @@ function numberAt(
   return value;
 }
 
-function assertAllowedKeys(
-  value: JsonObject,
-  allowed: readonly string[],
-  direction: ConversionDirection,
-  path: string
-): void {
-  const allowedSet = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!allowedSet.has(key)) {
-      fail(direction, `${path}.${key}`, `Unsupported field \"${key}\"`);
-    }
-  }
-}
-
 function parseJsonObject(
   text: string,
   direction: ConversionDirection,
@@ -175,11 +164,10 @@ function parseToolArguments(
 function consumeAnthropicCacheControl(value: unknown, path: string): void {
   if (value === undefined || value === null) return;
   const cache = objectAt(value, ANT_TO_OAI, path);
-  assertAllowedKeys(cache, ["type", "ttl"], ANT_TO_OAI, path);
   if (cache.type !== "ephemeral") {
     fail(ANT_TO_OAI, `${path}.type`, `Unsupported cache type \"${String(cache.type)}\"`);
   }
-  if (cache.ttl !== undefined && cache.ttl !== "5m" && cache.ttl !== "1h") {
+  if (isPresent(cache.ttl) && cache.ttl !== "5m" && cache.ttl !== "1h") {
     fail(ANT_TO_OAI, `${path}.ttl`, `Unsupported cache TTL \"${String(cache.ttl)}\"`);
   }
   fail(
@@ -202,7 +190,6 @@ function textFromOpenAIContent(
     .map((rawBlock, index) => {
       const blockPath = `${path}[${index}]`;
       const block = objectAt(rawBlock, direction, blockPath);
-      assertAllowedKeys(block, ["type", "text"], direction, blockPath);
       if (block.type !== "text") {
         fail(
           direction,
@@ -226,7 +213,6 @@ function textFromAnthropicBlocks(
     .map((rawBlock, index) => {
       const blockPath = `${path}[${index}]`;
       const block = objectAt(rawBlock, direction, blockPath);
-      assertAllowedKeys(block, ["type", "text", "cache_control"], direction, blockPath);
       if (block.type !== "text") {
         fail(
           direction,
@@ -251,7 +237,6 @@ function anthropicToolResultText(
     .map((rawBlock, index) => {
       const blockPath = `${path}[${index}]`;
       const block = objectAt(rawBlock, direction, blockPath);
-      assertAllowedKeys(block, ["type", "text", "cache_control"], direction, blockPath);
       if (block.type !== "text") {
         fail(
           direction,
@@ -316,26 +301,6 @@ function compactAnthropicMessageContent(message: JsonObject): JsonObject {
 /** Convert an OpenAI Chat Completions request object to Anthropic Messages. */
 export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject {
   const body = objectAt(value, OAI_TO_ANT, "$request");
-  assertAllowedKeys(
-    body,
-    [
-      "model",
-      "messages",
-      "max_tokens",
-      "max_completion_tokens",
-      "temperature",
-      "top_p",
-      "stop",
-      "stream",
-      "stream_options",
-      "tools",
-      "tool_choice",
-      "parallel_tool_calls",
-      "user",
-    ],
-    OAI_TO_ANT,
-    "$request"
-  );
 
   const out: JsonObject = {
     model: stringAt(body.model, OAI_TO_ANT, "$request.model", false),
@@ -343,7 +308,7 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
 
   const oldMax = body.max_tokens;
   const newMax = body.max_completion_tokens;
-  if (oldMax !== undefined && newMax !== undefined && oldMax !== newMax) {
+  if (isPresent(oldMax) && isPresent(newMax) && oldMax !== newMax) {
     fail(
       OAI_TO_ANT,
       "$request.max_completion_tokens",
@@ -351,12 +316,12 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
     );
   }
   out.max_tokens =
-    oldMax !== undefined
+    isPresent(oldMax)
       ? numberAt(oldMax, OAI_TO_ANT, "$request.max_tokens", {
           integer: true,
           positive: true,
         })
-      : newMax !== undefined
+      : isPresent(newMax)
         ? numberAt(newMax, OAI_TO_ANT, "$request.max_completion_tokens", {
             integer: true,
             positive: true,
@@ -364,21 +329,20 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
         : 1024;
 
   for (const key of ["temperature", "top_p"] as const) {
-    if (body[key] !== undefined) {
+    if (isPresent(body[key])) {
       out[key] = numberAt(body[key], OAI_TO_ANT, `$request.${key}`);
     }
   }
-  if (body.stream !== undefined) {
+  if (isPresent(body.stream)) {
     out.stream = booleanAt(body.stream, OAI_TO_ANT, "$request.stream");
   }
-  if (body.stream_options !== undefined) {
+  if (isPresent(body.stream_options)) {
     const options = objectAt(
       body.stream_options,
       OAI_TO_ANT,
       "$request.stream_options"
     );
-    assertAllowedKeys(options, ["include_usage"], OAI_TO_ANT, "$request.stream_options");
-    if (options.include_usage !== undefined) {
+    if (isPresent(options.include_usage)) {
       booleanAt(
         options.include_usage,
         OAI_TO_ANT,
@@ -401,22 +365,16 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
   messages.forEach((rawMessage, messageIndex) => {
     const path = `$request.messages[${messageIndex}]`;
     const message = objectAt(rawMessage, OAI_TO_ANT, path);
-    assertAllowedKeys(
-      message,
-      ["role", "content", "tool_calls", "tool_call_id", "name", "refusal"],
-      OAI_TO_ANT,
-      path
-    );
     const role = stringAt(message.role, OAI_TO_ANT, `${path}.role`, false);
-    if (message.refusal !== undefined && message.refusal !== null && message.refusal !== "") {
+    if (isPresent(message.refusal) && message.refusal !== "") {
       fail(OAI_TO_ANT, `${path}.refusal`, "OpenAI refusal content has no Anthropic request equivalent");
     }
 
     if (role === "system") {
-      if (message.tool_calls !== undefined || message.tool_call_id !== undefined) {
+      if (isPresent(message.tool_calls) || isPresent(message.tool_call_id)) {
         fail(OAI_TO_ANT, path, "A system message cannot contain tool fields");
       }
-      if (message.name !== undefined) {
+      if (isPresent(message.name)) {
         fail(OAI_TO_ANT, `${path}.name`, "Named system messages have no Anthropic equivalent");
       }
       systemParts.push(textFromOpenAIContent(message.content, OAI_TO_ANT, `${path}.content`));
@@ -430,7 +388,7 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
         `${path}.tool_call_id`,
         false
       );
-      if (message.tool_calls !== undefined) {
+      if (isPresent(message.tool_calls)) {
         fail(OAI_TO_ANT, `${path}.tool_calls`, "A tool result cannot contain tool_calls");
       }
       appendAnthropicToolResult(anthropicMessages, {
@@ -448,8 +406,12 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
     if (role !== "user" && role !== "assistant") {
       fail(OAI_TO_ANT, `${path}.role`, `Unsupported OpenAI message role \"${role}\"`);
     }
-    if (message.tool_call_id !== undefined || message.name !== undefined) {
-      fail(OAI_TO_ANT, path, `Unsupported fields for role \"${role}\"`);
+    if (isPresent(message.tool_call_id) || isPresent(message.name)) {
+      fail(
+        OAI_TO_ANT,
+        path,
+        `tool_call_id and name cannot be converted for role \"${role}\"`
+      );
     }
 
     const blocks: JsonObject[] = [];
@@ -461,7 +423,7 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
     );
     if (text !== "" || role === "user") blocks.push({ type: "text", text });
 
-    if (message.tool_calls !== undefined) {
+    if (isPresent(message.tool_calls)) {
       if (role !== "assistant") {
         fail(OAI_TO_ANT, `${path}.tool_calls`, "Only assistant messages may contain tool_calls");
       }
@@ -469,12 +431,10 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
         (rawCall, callIndex) => {
           const callPath = `${path}.tool_calls[${callIndex}]`;
           const call = objectAt(rawCall, OAI_TO_ANT, callPath);
-          assertAllowedKeys(call, ["id", "type", "function"], OAI_TO_ANT, callPath);
           if (call.type !== "function") {
             fail(OAI_TO_ANT, `${callPath}.type`, "Only function tool calls are supported");
           }
           const fn = objectAt(call.function, OAI_TO_ANT, `${callPath}.function`);
-          assertAllowedKeys(fn, ["name", "arguments"], OAI_TO_ANT, `${callPath}.function`);
           blocks.push({
             type: "tool_use",
             id: stringAt(call.id, OAI_TO_ANT, `${callPath}.id`, false),
@@ -494,37 +454,30 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
   if (systemParts.length > 0) out.system = systemParts.join("\n\n");
   out.messages = anthropicMessages.map(compactAnthropicMessageContent);
 
-  if (body.tools !== undefined) {
+  if (isPresent(body.tools)) {
     out.tools = arrayAt(body.tools, OAI_TO_ANT, "$request.tools").map(
       (rawTool, index) => {
         const path = `$request.tools[${index}]`;
         const tool = objectAt(rawTool, OAI_TO_ANT, path);
-        assertAllowedKeys(tool, ["type", "function"], OAI_TO_ANT, path);
         if (tool.type !== "function") {
           fail(OAI_TO_ANT, `${path}.type`, "Only function tools are supported");
         }
         const fn = objectAt(tool.function, OAI_TO_ANT, `${path}.function`);
-        assertAllowedKeys(
-          fn,
-          ["name", "description", "parameters", "strict"],
-          OAI_TO_ANT,
-          `${path}.function`
-        );
         const converted: JsonObject = {
           name: stringAt(fn.name, OAI_TO_ANT, `${path}.function.name`, false),
           input_schema:
-            fn.parameters === undefined
+            !isPresent(fn.parameters)
               ? { type: "object", properties: {} }
               : objectAt(fn.parameters, OAI_TO_ANT, `${path}.function.parameters`),
         };
-        if (fn.description !== undefined) {
+        if (isPresent(fn.description)) {
           converted.description = stringAt(
             fn.description,
             OAI_TO_ANT,
             `${path}.function.description`
           );
         }
-        if (fn.strict !== undefined) {
+        if (isPresent(fn.strict)) {
           converted.strict = booleanAt(
             fn.strict,
             OAI_TO_ANT,
@@ -550,19 +503,17 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
       }
     } else {
       const choice = objectAt(body.tool_choice, OAI_TO_ANT, "$request.tool_choice");
-      assertAllowedKeys(choice, ["type", "function"], OAI_TO_ANT, "$request.tool_choice");
       if (choice.type !== "function") {
         fail(OAI_TO_ANT, "$request.tool_choice.type", "Only function tool_choice is supported");
       }
       const fn = objectAt(choice.function, OAI_TO_ANT, "$request.tool_choice.function");
-      assertAllowedKeys(fn, ["name"], OAI_TO_ANT, "$request.tool_choice.function");
       toolChoice = {
         type: "tool",
         name: stringAt(fn.name, OAI_TO_ANT, "$request.tool_choice.function.name", false),
       };
     }
   }
-  if (body.parallel_tool_calls !== undefined) {
+  if (isPresent(body.parallel_tool_calls)) {
     const parallel = booleanAt(
       body.parallel_tool_calls,
       OAI_TO_ANT,
@@ -575,7 +526,7 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
   }
   if (toolChoice) out.tool_choice = toolChoice;
 
-  if (body.user !== undefined) {
+  if (isPresent(body.user)) {
     out.metadata = {
       user_id: stringAt(body.user, OAI_TO_ANT, "$request.user", false),
     };
@@ -586,30 +537,6 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
 /** Convert an Anthropic Messages request object to OpenAI Chat Completions. */
 export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject {
   const body = objectAt(value, ANT_TO_OAI, "$request");
-  assertAllowedKeys(
-    body,
-    [
-      "model",
-      "messages",
-      "system",
-      "max_tokens",
-      "temperature",
-      "top_p",
-      "stop_sequences",
-      "stream",
-      "tools",
-      "tool_choice",
-      "metadata",
-      // Anthropic 扩展思考配置在 Chat 中没有稳定等价项；兼容路由时忽略。
-      "thinking",
-      // 部分 Anthropic 兼容客户端附带的追踪元数据，不影响生成语义；
-      // OpenAI Chat 没有对应字段，按兼容约定安全忽略。
-      "request_timestamp",
-      "created_timestamp",
-    ],
-    ANT_TO_OAI,
-    "$request"
-  );
   const out: JsonObject = {
     model: stringAt(body.model, ANT_TO_OAI, "$request.model", false),
     max_tokens: numberAt(body.max_tokens, ANT_TO_OAI, "$request.max_tokens", {
@@ -621,15 +548,15 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
     stream: false,
   };
   for (const key of ["temperature", "top_p"] as const) {
-    if (body[key] !== undefined) {
+    if (isPresent(body[key])) {
       out[key] = numberAt(body[key], ANT_TO_OAI, `$request.${key}`);
     }
   }
-  if (body.stream !== undefined) {
+  if (isPresent(body.stream)) {
     out.stream = booleanAt(body.stream, ANT_TO_OAI, "$request.stream");
     if (out.stream) out.stream_options = { include_usage: true };
   }
-  if (body.stop_sequences !== undefined) {
+  if (isPresent(body.stop_sequences)) {
     const stops = arrayAt(body.stop_sequences, ANT_TO_OAI, "$request.stop_sequences").map(
       (item, index) => stringAt(item, ANT_TO_OAI, `$request.stop_sequences[${index}]`)
     );
@@ -637,7 +564,7 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
   }
 
   const messages: JsonObject[] = [];
-  if (body.system !== undefined) {
+  if (isPresent(body.system)) {
     messages.push({
       role: "system",
       content: textFromAnthropicBlocks(body.system, ANT_TO_OAI, "$request.system"),
@@ -647,7 +574,6 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
     (rawMessage, messageIndex) => {
       const path = `$request.messages[${messageIndex}]`;
       const message = objectAt(rawMessage, ANT_TO_OAI, path);
-      assertAllowedKeys(message, ["role", "content"], ANT_TO_OAI, path);
       const role = stringAt(message.role, ANT_TO_OAI, `${path}.role`, false);
       if (role !== "user" && role !== "assistant") {
         fail(ANT_TO_OAI, `${path}.role`, `Unsupported Anthropic message role \"${role}\"`);
@@ -664,21 +590,9 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
           const blockPath = `${path}.content[${blockIndex}]`;
           const block = objectAt(rawBlock, ANT_TO_OAI, blockPath);
           if (block.type === "text") {
-            assertAllowedKeys(
-              block,
-              ["type", "text", "cache_control"],
-              ANT_TO_OAI,
-              blockPath
-            );
             consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
             text.push(stringAt(block.text, ANT_TO_OAI, `${blockPath}.text`));
           } else if (block.type === "tool_use") {
-            assertAllowedKeys(
-              block,
-              ["type", "id", "name", "input", "cache_control"],
-              ANT_TO_OAI,
-              blockPath
-            );
             consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
             toolCalls.push({
               id: stringAt(block.id, ANT_TO_OAI, `${blockPath}.id`, false),
@@ -722,12 +636,6 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
         const blockPath = `${path}.content[${blockIndex}]`;
         const block = objectAt(rawBlock, ANT_TO_OAI, blockPath);
         if (block.type === "text") {
-          assertAllowedKeys(
-            block,
-            ["type", "text", "cache_control"],
-            ANT_TO_OAI,
-            blockPath
-          );
           consumeAnthropicCacheControl(block.cache_control, `${blockPath}.cache_control`);
           const blockText = stringAt(block.text, ANT_TO_OAI, `${blockPath}.text`);
           pendingText += blockText;
@@ -735,13 +643,7 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
           return;
         }
         if (block.type === "tool_result") {
-          assertAllowedKeys(
-            block,
-            ["type", "tool_use_id", "content", "is_error", "cache_control"],
-            ANT_TO_OAI,
-            blockPath
-          );
-          if (block.is_error !== undefined) {
+          if (isPresent(block.is_error)) {
             const isError = booleanAt(
               block.is_error,
               ANT_TO_OAI,
@@ -794,29 +696,23 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
   );
   out.messages = messages;
 
-  if (body.tools !== undefined) {
+  if (isPresent(body.tools)) {
     out.tools = arrayAt(body.tools, ANT_TO_OAI, "$request.tools").map(
       (rawTool, index) => {
         const path = `$request.tools[${index}]`;
         const tool = objectAt(rawTool, ANT_TO_OAI, path);
-        assertAllowedKeys(
-          tool,
-          ["name", "description", "input_schema", "strict", "cache_control"],
-          ANT_TO_OAI,
-          path
-        );
         consumeAnthropicCacheControl(tool.cache_control, `${path}.cache_control`);
         const fn: JsonObject = {
           name: stringAt(tool.name, ANT_TO_OAI, `${path}.name`, false),
           parameters:
-            tool.input_schema === undefined
+            !isPresent(tool.input_schema)
               ? { type: "object", properties: {} }
               : objectAt(tool.input_schema, ANT_TO_OAI, `${path}.input_schema`),
         };
-        if (tool.description !== undefined) {
+        if (isPresent(tool.description)) {
           fn.description = stringAt(tool.description, ANT_TO_OAI, `${path}.description`);
         }
-        if (tool.strict !== undefined) {
+        if (isPresent(tool.strict)) {
           fn.strict = booleanAt(tool.strict, ANT_TO_OAI, `${path}.strict`);
         }
         return { type: "function", function: fn };
@@ -824,14 +720,8 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
     );
   }
 
-  if (body.tool_choice !== undefined) {
+  if (isPresent(body.tool_choice)) {
     const choice = objectAt(body.tool_choice, ANT_TO_OAI, "$request.tool_choice");
-    assertAllowedKeys(
-      choice,
-      ["type", "name", "disable_parallel_tool_use"],
-      ANT_TO_OAI,
-      "$request.tool_choice"
-    );
     const type = stringAt(choice.type, ANT_TO_OAI, "$request.tool_choice.type", false);
     if (type === "auto") out.tool_choice = "auto";
     else if (type === "any") out.tool_choice = "required";
@@ -844,7 +734,7 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       };
     } else if (type === "none") out.tool_choice = "none";
     else fail(ANT_TO_OAI, "$request.tool_choice.type", `Unsupported tool_choice \"${type}\"`);
-    if (choice.disable_parallel_tool_use !== undefined) {
+    if (isPresent(choice.disable_parallel_tool_use)) {
       out.parallel_tool_calls = !booleanAt(
         choice.disable_parallel_tool_use,
         ANT_TO_OAI,
@@ -853,10 +743,9 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
     }
   }
 
-  if (body.metadata !== undefined) {
+  if (isPresent(body.metadata)) {
     const metadata = objectAt(body.metadata, ANT_TO_OAI, "$request.metadata");
-    assertAllowedKeys(metadata, ["user_id"], ANT_TO_OAI, "$request.metadata");
-    if (metadata.user_id !== undefined) {
+    if (isPresent(metadata.user_id)) {
       out.user = stringAt(metadata.user_id, ANT_TO_OAI, "$request.metadata.user_id", false);
     }
   }
@@ -917,22 +806,6 @@ interface AnthropicUsage {
 
 function readAnthropicUsage(value: unknown, path: string): AnthropicUsage {
   const usage = objectAt(value, ANT_TO_OAI, path);
-  assertAllowedKeys(
-    usage,
-    [
-      "input_tokens",
-      "output_tokens",
-      "cache_creation_input_tokens",
-      "cache_read_input_tokens",
-      "cache_creation",
-      "output_tokens_details",
-      "server_tool_use",
-      "service_tier",
-      "inference_geo",
-    ],
-    ANT_TO_OAI,
-    path
-  );
   const result: AnthropicUsage = {
     inputTokens:
       usage.input_tokens === undefined || usage.input_tokens === null
@@ -977,18 +850,12 @@ function readAnthropicUsage(value: unknown, path: string): AnthropicUsage {
       ANT_TO_OAI,
       `${path}.cache_creation`
     );
-    assertAllowedKeys(
-      cacheCreation,
-      ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"],
-      ANT_TO_OAI,
-      `${path}.cache_creation`
-    );
     let cacheCreationBreakdown = 0;
     for (const key of [
       "ephemeral_1h_input_tokens",
       "ephemeral_5m_input_tokens",
     ]) {
-      if (cacheCreation[key] !== undefined) {
+      if (isPresent(cacheCreation[key])) {
         cacheCreationBreakdown += numberAt(cacheCreation[key], ANT_TO_OAI, `${path}.cache_creation.${key}`, {
           integer: true,
           nonNegative: true,
@@ -1015,13 +882,7 @@ function readAnthropicUsage(value: unknown, path: string): AnthropicUsage {
       ANT_TO_OAI,
       `${path}.output_tokens_details`
     );
-    assertAllowedKeys(
-      details,
-      ["thinking_tokens"],
-      ANT_TO_OAI,
-      `${path}.output_tokens_details`
-    );
-    if (details.thinking_tokens !== undefined) {
+    if (isPresent(details.thinking_tokens)) {
       result.thinkingTokens = numberAt(
         details.thinking_tokens,
         ANT_TO_OAI,
@@ -1077,22 +938,6 @@ interface OpenAIUsage {
 
 function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
   const usage = objectAt(value, OAI_TO_ANT, path);
-  assertAllowedKeys(
-    usage,
-    [
-      "prompt_tokens",
-      "completion_tokens",
-      "total_tokens",
-      "prompt_tokens_details",
-      "completion_tokens_details",
-      // Accepted extensions let a previous Anthropic -> OpenAI conversion make
-      // a lossless round trip without changing standard OpenAI token totals.
-      "cache_creation_input_tokens",
-      "cache_read_input_tokens",
-    ],
-    OAI_TO_ANT,
-    path
-  );
   const promptTokens = numberAt(
     usage.prompt_tokens,
     OAI_TO_ANT,
@@ -1105,7 +950,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
     `${path}.completion_tokens`,
     { integer: true, nonNegative: true }
   );
-  if (usage.total_tokens !== undefined) {
+  if (isPresent(usage.total_tokens)) {
     const total = numberAt(usage.total_tokens, OAI_TO_ANT, `${path}.total_tokens`, {
       integer: true,
       nonNegative: true,
@@ -1123,14 +968,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
       OAI_TO_ANT,
       `${path}.prompt_tokens_details`
     );
-    // Other detail counters do not alter the cache mapping.
-    assertAllowedKeys(
-      details,
-      ["cached_tokens", "cache_write_tokens", "audio_tokens"],
-      OAI_TO_ANT,
-      `${path}.prompt_tokens_details`
-    );
-    if (details.cached_tokens !== undefined) {
+    if (isPresent(details.cached_tokens)) {
       cacheRead = numberAt(
         details.cached_tokens,
         OAI_TO_ANT,
@@ -1138,7 +976,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
         { integer: true, nonNegative: true }
       );
     }
-    if (details.cache_write_tokens !== undefined) {
+    if (isPresent(details.cache_write_tokens)) {
       cacheCreation = numberAt(
         details.cache_write_tokens,
         OAI_TO_ANT,
@@ -1146,7 +984,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
         { integer: true, nonNegative: true }
       );
     }
-    if (details.audio_tokens !== undefined && details.audio_tokens !== 0) {
+    if (isPresent(details.audio_tokens) && details.audio_tokens !== 0) {
       fail(
         OAI_TO_ANT,
         `${path}.prompt_tokens_details.audio_tokens`,
@@ -1154,7 +992,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
       );
     }
   }
-  if (usage.cache_read_input_tokens !== undefined) {
+  if (isPresent(usage.cache_read_input_tokens)) {
     const direct = numberAt(
       usage.cache_read_input_tokens,
       OAI_TO_ANT,
@@ -1166,7 +1004,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
     }
     cacheRead = direct;
   }
-  if (usage.cache_creation_input_tokens !== undefined) {
+  if (isPresent(usage.cache_creation_input_tokens)) {
     const direct = numberAt(
       usage.cache_creation_input_tokens,
       OAI_TO_ANT,
@@ -1188,18 +1026,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
       OAI_TO_ANT,
       `${path}.completion_tokens_details`
     );
-    assertAllowedKeys(
-      details,
-      [
-        "reasoning_tokens",
-        "audio_tokens",
-        "accepted_prediction_tokens",
-        "rejected_prediction_tokens",
-      ],
-      OAI_TO_ANT,
-      `${path}.completion_tokens_details`
-    );
-    if (details.reasoning_tokens !== undefined) {
+    if (isPresent(details.reasoning_tokens)) {
       thinkingTokens = numberAt(
         details.reasoning_tokens,
         OAI_TO_ANT,
@@ -1219,7 +1046,7 @@ function readOpenAIUsage(value: unknown, path: string): OpenAIUsage {
       "accepted_prediction_tokens",
       "rejected_prediction_tokens",
     ] as const) {
-      if (details[unsupported] !== undefined && details[unsupported] !== 0) {
+      if (isPresent(details[unsupported]) && details[unsupported] !== 0) {
         fail(
           OAI_TO_ANT,
           `${path}.completion_tokens_details.${unsupported}`,
@@ -1265,22 +1092,6 @@ export function convertAnthropicResponseToOpenAIChat(
   fallbackModel = ""
 ): JsonObject {
   const response = objectAt(value, ANT_TO_OAI, "$response");
-  assertAllowedKeys(
-    response,
-    [
-      "id",
-      "type",
-      "role",
-      "model",
-      "content",
-      "stop_reason",
-      "stop_sequence",
-      "usage",
-      "container",
-    ],
-    ANT_TO_OAI,
-    "$response"
-  );
   if (response.type !== "message") {
     fail(ANT_TO_OAI, "$response.type", "Expected an Anthropic message response");
   }
@@ -1294,10 +1105,8 @@ export function convertAnthropicResponseToOpenAIChat(
       const path = `$response.content[${index}]`;
       const block = objectAt(rawBlock, ANT_TO_OAI, path);
       if (block.type === "text") {
-        assertAllowedKeys(block, ["type", "text"], ANT_TO_OAI, path);
         textParts.push(stringAt(block.text, ANT_TO_OAI, `${path}.text`));
       } else if (block.type === "tool_use") {
-        assertAllowedKeys(block, ["type", "id", "name", "input"], ANT_TO_OAI, path);
         toolCalls.push({
           id: stringAt(block.id, ANT_TO_OAI, `${path}.id`, false),
           type: "function",
@@ -1333,7 +1142,7 @@ export function convertAnthropicResponseToOpenAIChat(
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model:
-      response.model === undefined
+      !isPresent(response.model)
         ? fallbackModel
         : stringAt(response.model, ANT_TO_OAI, "$response.model"),
     choices: [
@@ -1358,25 +1167,7 @@ export function convertOpenAIChatResponseToAnthropic(
   fallbackModel = ""
 ): JsonObject {
   const response = objectAt(value, OAI_TO_ANT, "$response");
-  assertAllowedKeys(
-    response,
-    [
-      "id",
-      "object",
-      "created",
-      "model",
-      "choices",
-      "usage",
-      "system_fingerprint",
-      "service_tier",
-      // CodeAgent 的非标准追踪元数据；不影响 Anthropic 响应语义。
-      "request_timestamp",
-      "created_timestamp",
-    ],
-    OAI_TO_ANT,
-    "$response"
-  );
-  if (response.object !== undefined && response.object !== "chat.completion") {
+  if (isPresent(response.object) && response.object !== "chat.completion") {
     fail(OAI_TO_ANT, "$response.object", "Expected an OpenAI chat.completion response");
   }
   const choices = arrayAt(response.choices, OAI_TO_ANT, "$response.choices");
@@ -1384,32 +1175,10 @@ export function convertOpenAIChatResponseToAnthropic(
     fail(OAI_TO_ANT, "$response.choices", "Anthropic Messages can represent exactly one choice");
   }
   const choice = objectAt(choices[0], OAI_TO_ANT, "$response.choices[0]");
-  assertAllowedKeys(
-    choice,
-    ["index", "message", "finish_reason", "logprobs"],
-    OAI_TO_ANT,
-    "$response.choices[0]"
-  );
   if (choice.logprobs !== undefined && choice.logprobs !== null) {
     fail(OAI_TO_ANT, "$response.choices[0].logprobs", "Log probabilities are not representable");
   }
   const message = objectAt(choice.message, OAI_TO_ANT, "$response.choices[0].message");
-  assertAllowedKeys(
-    message,
-    [
-      "role",
-      "content",
-      "tool_calls",
-      "reasoning_content",
-      "thinking",
-      "refusal",
-      "annotations",
-      "audio",
-      "function_call",
-    ],
-    OAI_TO_ANT,
-    "$response.choices[0].message"
-  );
   if (message.role !== "assistant") {
     fail(OAI_TO_ANT, "$response.choices[0].message.role", "Expected assistant response role");
   }
@@ -1444,12 +1213,10 @@ export function convertOpenAIChatResponseToAnthropic(
     ).forEach((rawCall, index) => {
       const path = `$response.choices[0].message.tool_calls[${index}]`;
       const call = objectAt(rawCall, OAI_TO_ANT, path);
-      assertAllowedKeys(call, ["id", "type", "function"], OAI_TO_ANT, path);
       if (call.type !== "function") {
         fail(OAI_TO_ANT, `${path}.type`, "Only function tool calls are supported");
       }
       const fn = objectAt(call.function, OAI_TO_ANT, `${path}.function`);
-      assertAllowedKeys(fn, ["name", "arguments"], OAI_TO_ANT, `${path}.function`);
       content.push({
         type: "tool_use",
         id: stringAt(call.id, OAI_TO_ANT, `${path}.id`, false),
@@ -1468,7 +1235,7 @@ export function convertOpenAIChatResponseToAnthropic(
     type: "message",
     role: "assistant",
     model:
-      response.model === undefined
+      !isPresent(response.model)
         ? fallbackModel
         : stringAt(response.model, OAI_TO_ANT, "$response.model"),
     content,
@@ -1671,7 +1438,7 @@ export class AnthropicToOpenAIStreamConverter {
     const data = parseJsonObject(event.data, ANT_TO_OAI, "$stream.data");
     const type = data.type ?? event.event;
     if (typeof type !== "string") fail(ANT_TO_OAI, "$stream.type", "Missing event type");
-    if (event.event !== "message" && data.type !== undefined && event.event !== type) {
+    if (event.event !== "message" && isPresent(data.type) && event.event !== type) {
       fail(ANT_TO_OAI, "$stream.type", "SSE event name and payload type disagree");
     }
 
@@ -1700,13 +1467,13 @@ export class AnthropicToOpenAIStreamConverter {
   private messageStart(data: JsonObject): string {
     if (this.started) fail(ANT_TO_OAI, "$stream", "Duplicate message_start");
     const message = objectAt(data.message, ANT_TO_OAI, "$stream.message_start.message");
-    if (message.type !== undefined && message.type !== "message") {
+    if (isPresent(message.type) && message.type !== "message") {
       fail(ANT_TO_OAI, "$stream.message_start.message.type", "Expected message type");
     }
-    if (message.role !== undefined && message.role !== "assistant") {
+    if (isPresent(message.role) && message.role !== "assistant") {
       fail(ANT_TO_OAI, "$stream.message_start.message.role", "Expected assistant role");
     }
-    if (message.content !== undefined) {
+    if (isPresent(message.content)) {
       const initialContent = arrayAt(
         message.content,
         ANT_TO_OAI,
@@ -1726,7 +1493,7 @@ export class AnthropicToOpenAIStreamConverter {
       ANT_TO_OAI,
       "$stream.message_start.message.model"
     );
-    if (message.usage !== undefined) {
+    if (isPresent(message.usage)) {
       this.mergeUsage(readAnthropicUsage(message.usage, "$stream.message_start.message.usage"));
     }
     this.started = true;
@@ -1751,12 +1518,6 @@ export class AnthropicToOpenAIStreamConverter {
       "$stream.content_block_start.content_block"
     );
     if (content.type === "text") {
-      assertAllowedKeys(
-        content,
-        ["type", "text"],
-        ANT_TO_OAI,
-        "$stream.content_block_start.content_block"
-      );
       const text = stringAt(
         content.text,
         ANT_TO_OAI,
@@ -1766,12 +1527,6 @@ export class AnthropicToOpenAIStreamConverter {
       return text === "" ? "" : this.chunk({ content: text }, null);
     }
     if (content.type === "tool_use") {
-      assertAllowedKeys(
-        content,
-        ["type", "id", "name", "input"],
-        ANT_TO_OAI,
-        "$stream.content_block_start.content_block"
-      );
       const toolIndex = this.nextToolIndex++;
       const initialArguments = stringifyToolInput(
         content.input,
@@ -1838,7 +1593,6 @@ export class AnthropicToOpenAIStreamConverter {
     }
     const delta = objectAt(data.delta, ANT_TO_OAI, "$stream.content_block_delta.delta");
     if (delta.type === "text_delta" && block.kind === "text") {
-      assertAllowedKeys(delta, ["type", "text"], ANT_TO_OAI, "$stream.content_block_delta.delta");
       return this.chunk(
         {
           content: stringAt(
@@ -1851,12 +1605,6 @@ export class AnthropicToOpenAIStreamConverter {
       );
     }
     if (delta.type === "input_json_delta" && block.kind === "tool") {
-      assertAllowedKeys(
-        delta,
-        ["type", "partial_json"],
-        ANT_TO_OAI,
-        "$stream.content_block_delta.delta"
-      );
       const partial = stringAt(
         delta.partial_json,
         ANT_TO_OAI,
@@ -1912,13 +1660,7 @@ export class AnthropicToOpenAIStreamConverter {
   private messageDelta(data: JsonObject): string {
     this.requireStarted("message_delta");
     const delta = objectAt(data.delta, ANT_TO_OAI, "$stream.message_delta.delta");
-    assertAllowedKeys(
-      delta,
-      ["stop_reason", "stop_sequence"],
-      ANT_TO_OAI,
-      "$stream.message_delta.delta"
-    );
-    if (data.usage !== undefined) {
+    if (isPresent(data.usage)) {
       this.mergeUsage(readAnthropicUsage(data.usage, "$stream.message_delta.usage"));
     }
     if (delta.stop_reason !== undefined && delta.stop_reason !== null) {
@@ -2082,39 +1824,26 @@ export class OpenAIToAnthropicStreamConverter {
     if (this.ended) fail(OAI_TO_ANT, "$stream", "Received data after [DONE]");
     if (event.data.trim() === "[DONE]") return this.endMessage();
     const data = parseJsonObject(event.data, OAI_TO_ANT, "$stream.data");
-    if (data.error !== undefined) {
+    if (isPresent(data.error)) {
       fail(OAI_TO_ANT, "$stream.error", `OpenAI stream error: ${JSON.stringify(data.error)}`);
     }
-    if (data.usage !== undefined && data.usage !== null) {
+    if (isPresent(data.usage)) {
       this.usage = readOpenAIUsage(data.usage, "$stream.usage");
     }
-    const choices = arrayAt(data.choices, OAI_TO_ANT, "$stream.choices");
+    const choices = isPresent(data.choices)
+      ? arrayAt(data.choices, OAI_TO_ANT, "$stream.choices")
+      : [];
     if (choices.length === 0) return "";
     if (choices.length !== 1) {
       fail(OAI_TO_ANT, "$stream.choices", "Anthropic Messages can represent exactly one choice");
     }
     const choice = objectAt(choices[0], OAI_TO_ANT, "$stream.choices[0]");
-    if (choice.index !== undefined && choice.index !== 0) {
+    if (isPresent(choice.index) && choice.index !== 0) {
       fail(OAI_TO_ANT, "$stream.choices[0].index", "Only choice index 0 is supported");
     }
     let output = this.ensureMessageStart(data);
     const delta = objectAt(choice.delta ?? {}, OAI_TO_ANT, "$stream.choices[0].delta");
-    assertAllowedKeys(
-      delta,
-      [
-        "role",
-        "content",
-        "tool_calls",
-        "reasoning_content",
-        "thinking",
-        "refusal",
-        "function_call",
-        "audio",
-      ],
-      OAI_TO_ANT,
-      "$stream.choices[0].delta"
-    );
-    if (delta.role !== undefined && delta.role !== "assistant") {
+    if (isPresent(delta.role) && delta.role !== "assistant") {
       fail(OAI_TO_ANT, "$stream.choices[0].delta.role", "Expected assistant delta role");
     }
     for (const unsupported of ["refusal", "function_call", "audio"] as const) {
@@ -2154,10 +1883,10 @@ export class OpenAIToAnthropicStreamConverter {
 
   private ensureMessageStart(data: JsonObject): string {
     if (this.started) {
-      if (data.id !== undefined && data.id !== this.id) {
+      if (isPresent(data.id) && data.id !== this.id) {
         fail(OAI_TO_ANT, "$stream.id", "Message id changed during stream");
       }
-      if (data.model !== undefined && data.model !== this.model) {
+      if (isPresent(data.model) && data.model !== this.model) {
         fail(OAI_TO_ANT, "$stream.model", "Model changed during stream");
       }
       return "";
@@ -2211,7 +1940,6 @@ export class OpenAIToAnthropicStreamConverter {
       (rawCall, arrayIndex) => {
         const path = `$stream.choices[0].delta.tool_calls[${arrayIndex}]`;
         const call = objectAt(rawCall, OAI_TO_ANT, path);
-        assertAllowedKeys(call, ["index", "id", "type", "function"], OAI_TO_ANT, path);
         const toolIndex = numberAt(call.index, OAI_TO_ANT, `${path}.index`, {
           integer: true,
           nonNegative: true,
@@ -2231,27 +1959,26 @@ export class OpenAIToAnthropicStreamConverter {
           this.tools.set(toolIndex, tool);
         }
         if (tool.stopped) fail(OAI_TO_ANT, path, `Tool call ${toolIndex} already stopped`);
-        if (call.type !== undefined && call.type !== "function") {
+        if (isPresent(call.type) && call.type !== "function") {
           fail(OAI_TO_ANT, `${path}.type`, "Only function tool calls are supported");
         }
-        if (call.id !== undefined) {
+        if (isPresent(call.id)) {
           const id = stringAt(call.id, OAI_TO_ANT, `${path}.id`, false);
           if (tool.id !== undefined && tool.id !== id) {
             fail(OAI_TO_ANT, `${path}.id`, `Tool call ${toolIndex} id changed`);
           }
           tool.id = id;
         }
-        if (call.function !== undefined) {
+        if (isPresent(call.function)) {
           const fn = objectAt(call.function, OAI_TO_ANT, `${path}.function`);
-          assertAllowedKeys(fn, ["name", "arguments"], OAI_TO_ANT, `${path}.function`);
-          if (fn.name !== undefined) {
+          if (isPresent(fn.name)) {
             const name = stringAt(fn.name, OAI_TO_ANT, `${path}.function.name`, false);
             if (tool.name !== undefined && tool.name !== name) {
               fail(OAI_TO_ANT, `${path}.function.name`, `Tool call ${toolIndex} name changed`);
             }
             tool.name = name;
           }
-          if (fn.arguments !== undefined) {
+          if (isPresent(fn.arguments)) {
             const args = stringAt(fn.arguments, OAI_TO_ANT, `${path}.function.arguments`);
             if (tool.allArguments.length + args.length > MAX_TOOL_ARGUMENTS) {
               fail(OAI_TO_ANT, `${path}.function.arguments`, "工具参数超过 1 MiB 限制");

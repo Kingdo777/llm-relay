@@ -330,19 +330,49 @@ test("Anthropic request -> OpenAI accepts and ignores thinking config", () => {
   assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
 });
 
-test("request conversion fails explicitly on unknown semantic fields and blocks", () => {
-  assert.throws(
-    () =>
-      convertOpenAIChatRequestToAnthropic({
-        model: "m",
-        messages: [{ role: "user", content: "hi" }],
-        response_format: { type: "json_object" },
-      }),
-    (error: unknown) =>
-      error instanceof ConversionError &&
-      error.path === "$request.response_format" &&
-      error.direction === "openai-to-anthropic"
-  );
+test("request conversion ignores unknown extensions but still rejects invalid core semantics", () => {
+  const openAI = convertOpenAIChatRequestToAnthropic({
+    model: "m",
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi", vendor_block_metadata: true }],
+        vendor_message_metadata: { trace: "abc" },
+      },
+    ],
+    response_format: { type: "json_object" },
+    vendor_request_metadata: { trace: "abc" },
+    tools: [
+      {
+        type: "function",
+        vendor_tool_metadata: true,
+        function: {
+          name: "noop",
+          parameters: { type: "object" },
+          vendor_function_metadata: true,
+        },
+      },
+    ],
+  });
+  assert.deepEqual(openAI.messages, [{ role: "user", content: "hi" }]);
+  assert.equal(openAI.response_format, undefined);
+  assert.equal(openAI.vendor_request_metadata, undefined);
+
+  const anthropic = convertAnthropicRequestToOpenAIChat({
+    model: "m",
+    max_tokens: 10,
+    messages: [
+      {
+        role: "user",
+        vendor_message_metadata: true,
+        content: [{ type: "text", text: "hi", vendor_block_metadata: true }],
+      },
+    ],
+    vendor_request_metadata: true,
+  });
+  assert.deepEqual(anthropic.messages, [{ role: "user", content: "hi" }]);
+  assert.equal(anthropic.vendor_request_metadata, undefined);
+
   assert.throws(
     () =>
       convertAnthropicRequestToOpenAIChat({
@@ -416,6 +446,51 @@ test("request conversion fails explicitly on unknown semantic fields and blocks"
   );
 });
 
+test("optional request fields treat null as omitted", () => {
+  const openAI = convertOpenAIChatRequestToAnthropic({
+    model: "m",
+    messages: [
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        refusal: null,
+      },
+    ],
+    max_tokens: null,
+    max_completion_tokens: null,
+    temperature: null,
+    top_p: null,
+    stop: null,
+    stream: null,
+    stream_options: null,
+    tools: null,
+    tool_choice: null,
+    parallel_tool_calls: null,
+    user: null,
+  });
+  assert.equal(openAI.max_tokens, 1024);
+  assert.deepEqual(openAI.messages, [{ role: "assistant", content: "" }]);
+
+  const anthropic = convertAnthropicRequestToOpenAIChat({
+    model: "m",
+    max_tokens: 10,
+    messages: [{ role: "user", content: "hi" }],
+    system: null,
+    temperature: null,
+    top_p: null,
+    stop_sequences: null,
+    stream: null,
+    tools: null,
+    tool_choice: null,
+    metadata: null,
+  });
+  assert.equal(anthropic.stream, false);
+  assert.deepEqual(anthropic.messages, [{ role: "user", content: "hi" }]);
+});
+
 test("Anthropic response -> OpenAI preserves text, tool calls and cache usage", () => {
   const converted = convertAnthropicResponseToOpenAIChat({
     id: "msg_123",
@@ -423,8 +498,14 @@ test("Anthropic response -> OpenAI preserves text, tool calls and cache usage", 
     role: "assistant",
     model: "claude",
     content: [
-      { type: "text", text: "I'll check." },
-      { type: "tool_use", id: "toolu_9", name: "lookup", input: { id: 9 } },
+      { type: "text", text: "I'll check.", vendor_block_metadata: true },
+      {
+        type: "tool_use",
+        id: "toolu_9",
+        name: "lookup",
+        input: { id: 9 },
+        vendor_tool_metadata: true,
+      },
     ],
     stop_reason: "tool_use",
     stop_sequence: null,
@@ -437,8 +518,10 @@ test("Anthropic response -> OpenAI preserves text, tool calls and cache usage", 
         ephemeral_1h_input_tokens: 20,
         ephemeral_5m_input_tokens: 0,
       },
-      output_tokens_details: { thinking_tokens: 2 },
+      output_tokens_details: { thinking_tokens: 2, vendor_usage_detail: 1 },
+      vendor_usage_metadata: true,
     },
+    vendor_response_metadata: true,
   });
 
   assert.equal(converted.id, "msg_123");
@@ -490,16 +573,23 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
     choices: [
       {
         index: 0,
+        vendor_choice_metadata: true,
         message: {
           role: "assistant",
           content: "Calling it",
           reasoning_content: "provider-private reasoning",
           thinking: "provider-private thinking",
+          vendor_message_metadata: true,
           tool_calls: [
             {
               id: "call_7",
               type: "function",
-              function: { name: "lookup", arguments: '{"x":7}' },
+              vendor_tool_metadata: true,
+              function: {
+                name: "lookup",
+                arguments: '{"x":7}',
+                vendor_function_metadata: true,
+              },
             },
           ],
         },
@@ -511,9 +601,18 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
       prompt_tokens: 100,
       completion_tokens: 11,
       total_tokens: 111,
-      prompt_tokens_details: { cached_tokens: 35, cache_write_tokens: 15 },
-      completion_tokens_details: { reasoning_tokens: 4 },
+      prompt_tokens_details: {
+        cached_tokens: 35,
+        cache_write_tokens: 15,
+        vendor_prompt_detail: 1,
+      },
+      completion_tokens_details: {
+        reasoning_tokens: 4,
+        vendor_completion_detail: 1,
+      },
+      vendor_usage_metadata: true,
     },
+    vendor_response_metadata: true,
   });
 
   assert.equal(converted.stop_reason, "tool_use");
@@ -607,9 +706,11 @@ test("Anthropic SSE -> OpenAI buffers arbitrary chunks and preserves UTF-8, stop
   const source =
     anthropicEvent("message_start", {
       type: "message_start",
+      vendor_event_metadata: true,
       message: {
         id: "msg_stream",
         model: "claude-stream",
+        vendor_message_metadata: true,
         usage: {
           input_tokens: 20,
           output_tokens: null,
@@ -617,18 +718,21 @@ test("Anthropic SSE -> OpenAI buffers arbitrary chunks and preserves UTF-8, stop
           cache_read_input_tokens: null,
           cache_creation: null,
           output_tokens_details: null,
+          vendor_usage_metadata: true,
         },
       },
     }) +
     anthropicEvent("content_block_start", {
       type: "content_block_start",
       index: 0,
-      content_block: { type: "text", text: "" },
+      vendor_event_metadata: true,
+      content_block: { type: "text", text: "", vendor_block_metadata: true },
     }) +
     anthropicEvent("content_block_delta", {
       type: "content_block_delta",
       index: 0,
-      delta: { type: "text_delta", text: "你好" },
+      vendor_event_metadata: true,
+      delta: { type: "text_delta", text: "你好", vendor_delta_metadata: true },
     }) +
     anthropicEvent("content_block_stop", {
       type: "content_block_stop",
@@ -636,8 +740,13 @@ test("Anthropic SSE -> OpenAI buffers arbitrary chunks and preserves UTF-8, stop
     }) +
     anthropicEvent("message_delta", {
       type: "message_delta",
-      delta: { stop_reason: "end_turn", stop_sequence: null },
-      usage: { output_tokens: 3 },
+      vendor_event_metadata: true,
+      delta: {
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        vendor_delta_metadata: true,
+      },
+      usage: { output_tokens: 3, vendor_usage_metadata: true },
     }) +
     anthropicEvent("message_stop", { type: "message_stop" });
 
@@ -918,25 +1027,40 @@ test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {
   });
 });
 
-test("OpenAI SSE rejects unknown deltas and invalid completed tool JSON", () => {
-  const unknown = new OpenAIToAnthropicStreamConverter();
-  assert.throws(
-    () =>
-      unknown.feed(
+test("OpenAI SSE ignores unknown extensions and rejects invalid completed tool JSON", () => {
+  const compatible = new OpenAIToAnthropicStreamConverter();
+  const compatibleOutput =
+    compatible.feed(
+      openAIEvent({ choices: null, provider_metadata_only: true }) +
+        openAIEvent({
+          id: "x",
+          model: "m",
+          provider_response_metadata: true,
+          choices: [
+            {
+              index: 0,
+              provider_choice_metadata: true,
+              delta: { provider_secret_field: "hidden" },
+              finish_reason: null,
+            },
+          ],
+        }) +
         openAIEvent({
           id: "x",
           model: "m",
           choices: [
             {
               index: 0,
-              delta: { provider_secret_field: "hidden" },
-              finish_reason: null,
+              delta: {},
+              finish_reason: "stop",
             },
           ],
-        })
-      ),
-    ConversionError
-  );
+        }) +
+        "data: [DONE]\n\n"
+    ) + compatible.finish();
+  assert.match(compatibleOutput, /event: message_start/);
+  assert.match(compatibleOutput, /event: message_stop/);
+  assert.doesNotMatch(compatibleOutput, /provider_secret_field/);
 
   const invalidTool = new OpenAIToAnthropicStreamConverter();
   invalidTool.feed(
