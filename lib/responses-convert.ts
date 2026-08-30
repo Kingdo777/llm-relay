@@ -553,31 +553,10 @@ function streamIndex(value: unknown, field: string): number {
 function responseUsage(value: unknown): JsonObject {
   const usage = objectValue(value, "usage");
   const billingContainer = optionalObject(usage.billing_usage);
-  if (
-    usage.billing_usage !== undefined &&
-    usage.billing_usage !== null &&
-    !billingContainer
-  ) {
-    throw new ConversionError(
-      "usage.billing_usage 必须是对象",
-      "invalid_usage",
-      "usage.billing_usage"
-    );
-  }
   const billing = optionalObject(billingContainer?.openai_usage);
-  if (
-    billingContainer?.openai_usage !== undefined &&
-    billingContainer.openai_usage !== null &&
-    !billing
-  ) {
-    throw new ConversionError(
-      "usage.billing_usage.openai_usage 必须是对象",
-      "invalid_usage",
-      "usage.billing_usage.openai_usage"
-    );
-  }
   if (billing) {
-    if (
+    try {
+      if (
       billing.prompt_tokens !== undefined &&
       billing.input_tokens !== undefined &&
       billing.prompt_tokens !== billing.input_tokens
@@ -681,13 +660,18 @@ function responseUsage(value: unknown): JsonObject {
     if (details?.cache_write_tokens !== undefined) {
       inputDetails.cache_write_tokens = cacheWrite;
     }
-    return {
-      input_tokens: input,
-      input_tokens_details: inputDetails,
-      output_tokens: output,
-      output_tokens_details: { reasoning_tokens: reasoning },
-      total_tokens: total,
-    };
+      return {
+        input_tokens: input,
+        input_tokens_details: inputDetails,
+        output_tokens: output,
+        output_tokens_details: { reasoning_tokens: reasoning },
+        total_tokens: total,
+      };
+    } catch (error) {
+      if (!(error instanceof ConversionError)) throw error;
+      // billing_usage 是供应商扩展。口径或结构不一致时回退到标准
+      // Anthropic usage，不能让附加计费元数据阻断正文转换。
+    }
   }
   const baseInput = usageInteger(usage.input_tokens, "usage.input_tokens");
   const cacheCreation = usage.cache_creation_input_tokens === undefined

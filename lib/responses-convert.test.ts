@@ -465,7 +465,16 @@ test("ignores unknown Anthropic response extensions at every converted level", (
       cache_read_input_tokens: 3,
       output_tokens: 1,
       vendor_usage_extension: 99,
-      billing_usage: { vendor_billing_extension: 99 },
+      billing_usage: {
+        vendor_billing_extension: 99,
+        openai_usage: {
+          prompt_tokens: 999,
+          input_tokens: 0,
+          completion_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 1000,
+        },
+      },
       cache_creation: {
         ephemeral_1h_input_tokens: 2,
         ephemeral_5m_input_tokens: 0,
