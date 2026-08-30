@@ -13,17 +13,22 @@ import type {
   RouteMode,
 } from "./types";
 
+const IS_NEXT_PRODUCTION_BUILD =
+  process.env.NEXT_PHASE === "phase-production-build";
+
 // SQLite 数据文件存放在项目根目录的 data/ 下
 // 通过环境变量 DATA_DIR 可覆盖（方便部署）
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(process.cwd(), "data");
 
-if (!fs.existsSync(DATA_DIR)) {
+if (!IS_NEXT_PRODUCTION_BUILD && !fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const DB_PATH = path.join(DATA_DIR, "relay.db");
+const DB_PATH = IS_NEXT_PRODUCTION_BUILD
+  ? ":memory:"
+  : path.join(DATA_DIR, "relay.db");
 
 // 单例：避免 Next.js dev 热更新时重复打开连接
 const globalForDb = globalThis as unknown as {
@@ -34,6 +39,13 @@ const SCHEMA_VERSION = 15;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
+  if (IS_NEXT_PRODUCTION_BUILD) {
+    // Next 构建 worker 只需要成功求值 Route 模块。使用进程内空表，既不
+    // 读取也不迁移真实数据库，避免并行 page-data worker 抢 SQLite 写锁。
+    db.pragma("foreign_keys = ON");
+    createTables(db);
+    return db;
+  }
   // 必须先设置等待时间；切换 WAL 本身也可能与其他进程争抢写锁。
   db.pragma("busy_timeout = 5000");
   db.pragma("journal_mode = WAL");
