@@ -212,9 +212,15 @@ export function requestStreamUsage(body: string, protocol: Protocol): string {
  */
 export function normalizeRequestToolTypes(
   body: string,
-  protocol: Protocol
+  protocol: Protocol,
+  options: { anthropicFunctionFallback?: boolean } = {}
 ): string {
-  if (protocol === "anthropic" || !body.trim()) return body;
+  if (
+    (protocol === "anthropic" && !options.anthropicFunctionFallback) ||
+    !body.trim()
+  ) {
+    return body;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -242,7 +248,14 @@ export function normalizeRequestToolTypes(
       !Array.isArray(tool.function);
     const isResponsesFunction =
       protocol === "openai-responses" && typeof tool.name === "string";
-    if (isChatFunction || isResponsesFunction) {
+    const isAnthropicFallbackFunction =
+      protocol === "anthropic" &&
+      options.anthropicFunctionFallback === true &&
+      typeof tool.name === "string" &&
+      !!tool.input_schema &&
+      typeof tool.input_schema === "object" &&
+      !Array.isArray(tool.input_schema);
+    if (isChatFunction || isResponsesFunction || isAnthropicFallbackFunction) {
       tool.type = "function";
       changed = true;
     }

@@ -22,6 +22,7 @@ import {
   routedStreamErrorFrame,
 } from "./route-conversion";
 import type { RoutedConversionContext } from "./route-conversion";
+import { fetchUpstreamWithToolTypeFallback } from "./upstream-fetch";
 
 export interface RelayResult {
   response: Response;
@@ -396,13 +397,16 @@ export async function relayRequest(
   }
 
   let response: Response;
+  let retriedAnthropicToolType = false;
   try {
-    response = await fetch(upstreamUrl, {
+    const fetched = await fetchUpstreamWithToolTypeFallback(upstreamUrl, {
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : outBody,
       signal: clientSignal,
-    });
+    }, backendProtocol, outBody);
+    response = fetched.response;
+    retriedAnthropicToolType = fetched.retriedAnthropicToolType;
   } catch (e) {
     const err = e as Error;
     const cause = (err as { cause?: { code?: string; name?: string } }).cause;
@@ -503,7 +507,9 @@ export async function relayRequest(
           ? `流式传输或转换中断：${streamError}`
           : plan.routed
             ? `跨格式转换：${routeDescription(plan)}`
-            : null,
+            : retriedAnthropicToolType
+              ? "Anthropic 工具类型兼容重试"
+              : null,
         output: logOutput.render(),
         duration_ms,
         status_code: status,
@@ -690,7 +696,11 @@ export async function relayRequest(
     status: ok ? "success" : "failed",
     error: ok
       ? plan.routed
-        ? `跨格式转换：${routeDescription(plan)}`
+        ? `跨格式转换：${routeDescription(plan)}${
+            retriedAnthropicToolType ? "；工具类型兼容重试" : ""
+          }`
+        : retriedAnthropicToolType
+          ? "Anthropic 工具类型兼容重试"
         : null
       : `上游 HTTP ${status}\n${bufText.slice(0, 2000)}`,
     output: clamp(clientText, MAX_OUTPUT_LEN),

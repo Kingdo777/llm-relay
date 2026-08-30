@@ -10,6 +10,7 @@ import {
   convertRoutedResponse,
   routeDescription,
 } from "./route-conversion";
+import { fetchUpstreamWithToolTypeFallback } from "./upstream-fetch";
 
 const PROBE_TIMEOUT_MS = 60_000;
 
@@ -68,12 +69,13 @@ export async function testLlm(
   }
 
   try {
-    const resp = await fetch(upstreamUrl, {
+    const fetched = await fetchUpstreamWithToolTypeFallback(upstreamUrl, {
       method: "POST",
       headers,
       body: outgoingBody,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
+    }, plan.backendProtocol, outgoingBody);
+    const resp = fetched.response;
 
     const duration_ms = Date.now() - start;
     const upstreamText = await resp.text();
@@ -104,8 +106,12 @@ export async function testLlm(
       return {
         success: true,
         message: plan.routed
-          ? `路由成功 ${routeDescription(plan)}（HTTP ${resp.status}，${duration_ms}ms）`
-          : `连接成功（HTTP ${resp.status}，${duration_ms}ms）`,
+          ? `路由成功 ${routeDescription(plan)}（HTTP ${resp.status}，${duration_ms}ms）${
+              fetched.retriedAnthropicToolType ? "，已兼容工具 type" : ""
+            }`
+          : `连接成功（HTTP ${resp.status}，${duration_ms}ms）${
+              fetched.retriedAnthropicToolType ? "，已兼容工具 type" : ""
+            }`,
         detail: tryExtractPreview(clientText),
         duration_ms,
       };
