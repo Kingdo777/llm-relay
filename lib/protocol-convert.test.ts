@@ -1279,8 +1279,18 @@ test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {
           index: 0,
           delta: {
             tool_calls: [
-              { index: 1, function: { arguments: "2}" } },
-              { index: 0, function: { arguments: "1}" } },
+              {
+                index: 1,
+                id: "",
+                type: "",
+                function: { name: "", arguments: "2}" },
+              },
+              {
+                index: 0,
+                id: "",
+                type: "",
+                function: { name: "", arguments: "1}" },
+              },
             ],
           },
           finish_reason: null,

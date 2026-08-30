@@ -2167,24 +2167,35 @@ export class OpenAIToAnthropicStreamConverter {
           this.tools.set(toolIndex, tool);
         }
         if (tool.stopped) fail(OAI_TO_ANT, path, `Tool call ${toolIndex} already stopped`);
-        if (isPresent(call.type) && call.type !== "function") {
+        if (
+          isPresent(call.type) &&
+          call.type !== "" &&
+          call.type !== "function"
+        ) {
           fail(OAI_TO_ANT, `${path}.type`, "Only function tool calls are supported");
         }
         if (isPresent(call.id)) {
-          const id = stringAt(call.id, OAI_TO_ANT, `${path}.id`, false);
-          if (tool.id !== undefined && tool.id !== id) {
-            fail(OAI_TO_ANT, `${path}.id`, `Tool call ${toolIndex} id changed`);
+          const id = stringAt(call.id, OAI_TO_ANT, `${path}.id`);
+          // GLM repeats sparse tool deltas with empty id/type/name values. They
+          // mean "unchanged", not a new identity; a real id/name is still
+          // required before the block can start or finish.
+          if (id !== "") {
+            if (tool.id !== undefined && tool.id !== id) {
+              fail(OAI_TO_ANT, `${path}.id`, `Tool call ${toolIndex} id changed`);
+            }
+            tool.id = id;
           }
-          tool.id = id;
         }
         if (isPresent(call.function)) {
           const fn = objectAt(call.function, OAI_TO_ANT, `${path}.function`);
           if (isPresent(fn.name)) {
-            const name = stringAt(fn.name, OAI_TO_ANT, `${path}.function.name`, false);
-            if (tool.name !== undefined && tool.name !== name) {
-              fail(OAI_TO_ANT, `${path}.function.name`, `Tool call ${toolIndex} name changed`);
+            const name = stringAt(fn.name, OAI_TO_ANT, `${path}.function.name`);
+            if (name !== "") {
+              if (tool.name !== undefined && tool.name !== name) {
+                fail(OAI_TO_ANT, `${path}.function.name`, `Tool call ${toolIndex} name changed`);
+              }
+              tool.name = name;
             }
-            tool.name = name;
           }
           if (isPresent(fn.arguments)) {
             const args = stringAt(fn.arguments, OAI_TO_ANT, `${path}.function.arguments`);
