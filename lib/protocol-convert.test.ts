@@ -336,7 +336,7 @@ test("Anthropic request -> OpenAI ignores non-semantic timestamp metadata", () =
   assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
 });
 
-test("Anthropic request -> OpenAI accepts and ignores thinking config", () => {
+test("Anthropic request -> generic OpenAI ignores unsupported thinking config", () => {
   const converted = convertAnthropicRequestToOpenAIChat({
     model: "claude-model",
     max_tokens: 32,
@@ -346,6 +346,69 @@ test("Anthropic request -> OpenAI accepts and ignores thinking config", () => {
 
   assert.equal(converted.thinking, undefined);
   assert.deepEqual(converted.messages, [{ role: "user", content: "hi" }]);
+});
+
+test("Anthropic request -> GLM preserves thinking controls and assistant reasoning", () => {
+  const converted = convertAnthropicRequestToOpenAIChat({
+    model: "GLM-5.2",
+    max_tokens: 8192,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "high" },
+    tools: [
+      {
+        name: "lookup",
+        description: "Look something up",
+        input_schema: { type: "object", properties: {} },
+      },
+    ],
+    messages: [
+      { role: "user", content: "find it" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "I should use lookup.",
+            signature: "relay-signature",
+          },
+          {
+            type: "tool_use",
+            id: "call_1",
+            name: "lookup",
+            input: { q: "it" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "call_1", content: "found" },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(converted.thinking, {
+    type: "enabled",
+    clear_thinking: false,
+  });
+  assert.equal(converted.reasoning_effort, "high");
+  assert.deepEqual(converted.messages, [
+    { role: "user", content: "find it" },
+    {
+      role: "assistant",
+      content: null,
+      reasoning_content: "I should use lookup.",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "lookup", arguments: '{"q":"it"}' },
+        },
+      ],
+    },
+    { role: "tool", tool_call_id: "call_1", content: "found" },
+  ]);
 });
 
 test("request conversion ignores unknown extensions but still rejects invalid core semantics", () => {
@@ -637,6 +700,11 @@ test("OpenAI response -> Anthropic preserves tool calls and cached token semanti
   assert.equal(converted.request_timestamp, undefined);
   assert.equal(converted.created_timestamp, undefined);
   assert.deepEqual(converted.content, [
+    {
+      type: "thinking",
+      thinking: "provider-private reasoning",
+      signature: "cmVsYXktb3BlbmFpLXJlYXNvbmluZy12MQ==",
+    },
     { type: "text", text: "Calling it" },
     { type: "tool_use", id: "call_7", name: "lookup", input: { x: 7 } },
   ]);
@@ -1078,16 +1146,47 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
       "content_block_delta",
       "content_block_delta",
       "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_delta",
+      "content_block_stop",
       "message_delta",
       "message_stop",
     ]
+  );
+  const thinkingDeltas = events
+    .filter((event) => event.event === "content_block_delta")
+    .map((event) => (event.data as Record<string, unknown>).delta)
+    .filter(
+      (delta): delta is Record<string, unknown> =>
+        !!delta &&
+        typeof delta === "object" &&
+        (delta as Record<string, unknown>).type === "thinking_delta"
+    );
+  assert.deepEqual(
+    thinkingDeltas.map((delta) => delta.thinking),
+    ["provider-private reasoning"]
+  );
+  const signatureDelta = events
+    .filter((event) => event.event === "content_block_delta")
+    .map((event) => (event.data as Record<string, unknown>).delta)
+    .find(
+      (delta) =>
+        !!delta &&
+        typeof delta === "object" &&
+        (delta as Record<string, unknown>).type === "signature_delta"
+    ) as Record<string, unknown>;
+  assert.equal(
+    signatureDelta.signature,
+    "cmVsYXktb3BlbmFpLXJlYXNvbmluZy12MQ=="
   );
   assert.equal(
     events
       .filter((event) => event.event === "content_block_delta")
       .map((event) => {
         const data = event.data as Record<string, unknown>;
-        return (data.delta as Record<string, unknown>).text;
+        const delta = data.delta as Record<string, unknown>;
+        return delta.type === "text_delta" ? delta.text : "";
       })
       .join(""),
     "hello"
@@ -1103,6 +1202,43 @@ test("OpenAI SSE -> Anthropic converts text, finish and final cached usage", () 
     output_tokens: 2,
     cache_read_input_tokens: 20,
   });
+});
+
+test("OpenAI SSE emits Anthropic thinking immediately on the first reasoning chunk", () => {
+  const converter = new OpenAIToAnthropicStreamConverter();
+  const firstOutput = converter.feed(
+    openAIEvent({
+      id: "chatcmpl_reasoning_first",
+      model: "GLM-5.2",
+      choices: [
+        {
+          index: 0,
+          delta: { role: "assistant", reasoning_content: "starting analysis" },
+          finish_reason: null,
+        },
+      ],
+    })
+  );
+  const firstEvents = parseSse(firstOutput);
+
+  assert.deepEqual(
+    firstEvents.map((event) => event.event),
+    ["message_start", "content_block_start", "content_block_delta"]
+  );
+  const delta = firstEvents[2].data as Record<string, unknown>;
+  assert.deepEqual(delta.delta, {
+    type: "thinking_delta",
+    thinking: "starting analysis",
+  });
+
+  converter.feed(
+    openAIEvent({
+      id: "chatcmpl_reasoning_first",
+      model: "GLM-5.2",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    }) + "data: [DONE]\n\n"
+  );
+  converter.finish();
 });
 
 test("OpenAI SSE -> Anthropic buffers fragmented parallel tool calls", () => {

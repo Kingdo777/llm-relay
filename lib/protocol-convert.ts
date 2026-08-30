@@ -34,6 +34,12 @@ const MAX_SSE_BUFFER = 1024 * 1024;
 const MAX_STREAM_BLOCKS = 256;
 const MAX_TOOL_ARGUMENTS = 1024 * 1024;
 const MAX_TOTAL_TOOL_ARGUMENTS = 16 * 1024 * 1024;
+/**
+ * OpenAI compatible backends do not provide Anthropic's cryptographic thinking
+ * signature.  This opaque marker only round-trips between the relay and an
+ * Anthropic client; request conversion strips it before forwarding upstream.
+ */
+const RELAY_THINKING_SIGNATURE = "cmVsYXktb3BlbmFpLXJlYXNvbmluZy12MQ==";
 
 function fail(
   direction: ConversionDirection,
@@ -514,8 +520,9 @@ export function convertOpenAIChatRequestToAnthropic(value: unknown): JsonObject 
 /** Convert an Anthropic Messages request object to OpenAI Chat Completions. */
 export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject {
   const body = objectAt(value, ANT_TO_OAI, "$request");
+  const model = stringAt(body.model, ANT_TO_OAI, "$request.model", false);
   const out: JsonObject = {
-    model: stringAt(body.model, ANT_TO_OAI, "$request.model", false),
+    model,
     max_tokens: numberAt(body.max_tokens, ANT_TO_OAI, "$request.max_tokens", {
       integer: true,
       positive: true,
@@ -538,6 +545,64 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       (item, index) => stringAt(item, ANT_TO_OAI, `$request.stop_sequences[${index}]`)
     );
     out.stop = stops.length === 1 ? stops[0] : stops;
+  }
+
+  // GLM's OpenAI-compatible API supports the same enabled/disabled thinking
+  // switch, but not Anthropic's budget_tokens. Keep this model-specific so a
+  // strict OpenAI backend never receives an unsupported vendor field.
+  if (/^glm(?:[-_.]|$)/i.test(model) && isPresent(body.thinking)) {
+    const thinking = objectAt(body.thinking, ANT_TO_OAI, "$request.thinking");
+    const type = stringAt(
+      thinking.type,
+      ANT_TO_OAI,
+      "$request.thinking.type",
+      false
+    );
+    if (type === "disabled") {
+      out.thinking = { type: "disabled" };
+    } else if (type === "enabled" || type === "adaptive") {
+      out.thinking = {
+        type: "enabled",
+        // Agent/tool turns must return reasoning_content on the next request.
+        ...(Array.isArray(body.tools) && body.tools.length > 0
+          ? { clear_thinking: false }
+          : {}),
+      };
+    } else {
+      fail(
+        ANT_TO_OAI,
+        "$request.thinking.type",
+        `Unsupported thinking type \"${type}\"`
+      );
+    }
+
+    if (isPresent(body.output_config)) {
+      const outputConfig = objectAt(
+        body.output_config,
+        ANT_TO_OAI,
+        "$request.output_config"
+      );
+      if (isPresent(outputConfig.effort)) {
+        const effort = stringAt(
+          outputConfig.effort,
+          ANT_TO_OAI,
+          "$request.output_config.effort",
+          false
+        );
+        if (
+          !["max", "xhigh", "high", "medium", "low", "minimal", "none"].includes(
+            effort
+          )
+        ) {
+          fail(
+            ANT_TO_OAI,
+            "$request.output_config.effort",
+            `Unsupported reasoning effort \"${effort}\"`
+          );
+        }
+        out.reasoning_effort = effort;
+      }
+    }
   }
 
   const messages: JsonObject[] = [];
@@ -579,12 +644,27 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
       const blocks = arrayAt(message.content, ANT_TO_OAI, `${path}.content`);
       if (role === "assistant") {
         const text: string[] = [];
+        const reasoning: string[] = [];
         const toolCalls: JsonObject[] = [];
         blocks.forEach((rawBlock, blockIndex) => {
           const blockPath = `${path}.content[${blockIndex}]`;
           const block = objectAt(rawBlock, ANT_TO_OAI, blockPath);
           if (block.type === "text") {
             text.push(stringAt(block.text, ANT_TO_OAI, `${blockPath}.text`));
+          } else if (block.type === "thinking") {
+            reasoning.push(
+              stringAt(block.thinking, ANT_TO_OAI, `${blockPath}.thinking`)
+            );
+            // signature is an Anthropic transport detail. GLM expects the
+            // preserved text in reasoning_content, never the signature.
+            if (isPresent(block.signature)) {
+              stringAt(block.signature, ANT_TO_OAI, `${blockPath}.signature`);
+            }
+          } else if (block.type === "redacted_thinking") {
+            // Encrypted Anthropic reasoning has no OpenAI representation.
+            if (isPresent(block.data)) {
+              stringAt(block.data, ANT_TO_OAI, `${blockPath}.data`);
+            }
           } else if (block.type === "tool_use") {
             toolCalls.push({
               id: stringAt(block.id, ANT_TO_OAI, `${blockPath}.id`, false),
@@ -610,6 +690,9 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
           role: "assistant",
           content: text.length > 0 ? text.join("") : null,
         };
+        if (reasoning.length > 0) {
+          converted.reasoning_content = reasoning.join("");
+        }
         if (toolCalls.length > 0) converted.tool_calls = toolCalls;
         messages.push(converted);
         return;
@@ -1198,6 +1281,22 @@ export function convertOpenAIChatResponseToAnthropic(
     }
   }
   const content: JsonObject[] = [];
+  // reasoning_content is the established Chat-compatible field. A few
+  // gateways use thinking instead; treat it as a fallback, not an additional
+  // stream, because some providers return both aliases with identical meaning.
+  const reasoning =
+    typeof message.reasoning_content === "string"
+      ? message.reasoning_content
+      : typeof message.thinking === "string"
+        ? message.thinking
+        : "";
+  if (reasoning !== "") {
+    content.push({
+      type: "thinking",
+      thinking: reasoning,
+      signature: RELAY_THINKING_SIGNATURE,
+    });
+  }
   const text = textFromOpenAIContent(
     message.content,
     OAI_TO_ANT,
@@ -1804,6 +1903,8 @@ export class OpenAIToAnthropicStreamConverter {
   private id = "msg_relay";
   private model = "";
   private nextBlockIndex = 0;
+  private thinkingBlockIndex: number | null = null;
+  private thinkingBlockStopped = false;
   private textBlockIndex: number | null = null;
   private textBlockStopped = false;
   private readonly tools = new Map<number, OpenAIStreamTool>();
@@ -1899,15 +2000,26 @@ export class OpenAIToAnthropicStreamConverter {
         );
       }
     }
+    const reasoning =
+      typeof delta.reasoning_content === "string"
+        ? delta.reasoning_content
+        : typeof delta.thinking === "string"
+          ? delta.thinking
+          : "";
+    if (reasoning !== "") output += this.thinkingDelta(reasoning);
     if (delta.content !== undefined && delta.content !== null) {
       const text = stringAt(
         delta.content,
         OAI_TO_ANT,
         "$stream.choices[0].delta.content"
       );
-      if (text !== "") output += this.textDelta(text);
+      if (text !== "") {
+        output += this.stopThinkingBlock();
+        output += this.textDelta(text);
+      }
     }
     if (delta.tool_calls !== undefined && delta.tool_calls !== null) {
+      output += this.stopThinkingBlock();
       output += this.toolCallDeltas(delta.tool_calls);
     }
     if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
@@ -1973,6 +2085,59 @@ export class OpenAIToAnthropicStreamConverter {
         type: "content_block_delta",
         index: this.textBlockIndex,
         delta: { type: "text_delta", text },
+      })
+    );
+  }
+
+  private thinkingDelta(thinking: string): string {
+    if (this.textBlockIndex !== null || this.tools.size > 0) {
+      fail(
+        OAI_TO_ANT,
+        "$stream.choices[0].delta.reasoning_content",
+        "Reasoning arrived after visible content or tool calls"
+      );
+    }
+    let output = "";
+    if (this.thinkingBlockIndex === null) {
+      this.thinkingBlockIndex = this.nextBlockIndex++;
+      output += anthropicSse("content_block_start", {
+        type: "content_block_start",
+        index: this.thinkingBlockIndex,
+        content_block: { type: "thinking", thinking: "", signature: "" },
+      });
+    }
+    if (this.thinkingBlockStopped) {
+      fail(
+        OAI_TO_ANT,
+        "$stream.choices[0].delta.reasoning_content",
+        "Reasoning arrived after its block stopped"
+      );
+    }
+    return (
+      output +
+      anthropicSse("content_block_delta", {
+        type: "content_block_delta",
+        index: this.thinkingBlockIndex,
+        delta: { type: "thinking_delta", thinking },
+      })
+    );
+  }
+
+  private stopThinkingBlock(): string {
+    if (this.thinkingBlockIndex === null || this.thinkingBlockStopped) return "";
+    this.thinkingBlockStopped = true;
+    return (
+      anthropicSse("content_block_delta", {
+        type: "content_block_delta",
+        index: this.thinkingBlockIndex,
+        delta: {
+          type: "signature_delta",
+          signature: RELAY_THINKING_SIGNATURE,
+        },
+      }) +
+      anthropicSse("content_block_stop", {
+        type: "content_block_stop",
+        index: this.thinkingBlockIndex,
       })
     );
   }
@@ -2064,7 +2229,7 @@ export class OpenAIToAnthropicStreamConverter {
   }
 
   private stopContentBlocks(): string {
-    let output = "";
+    let output = this.stopThinkingBlock();
     if (this.textBlockIndex !== null && !this.textBlockStopped) {
       this.textBlockStopped = true;
       output += anthropicSse("content_block_stop", {
