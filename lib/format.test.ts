@@ -6,6 +6,7 @@ import {
   buildUpstreamHeaders,
   buildUpstreamUrl,
   normalizeCodeAgentBaseUrl,
+  normalizeRequestToolTypes,
   requestStreamUsage,
   upstreamPathForProtocol,
 } from "./format";
@@ -173,5 +174,50 @@ test("requests usage events for streaming Chat Completions", () => {
   assert.equal(
     requestStreamUsage(JSON.stringify({ model: "alias", stream: true }), "anthropic"),
     JSON.stringify({ model: "alias", stream: true })
+  );
+});
+
+test("fills only unambiguous empty function tool types", () => {
+  const chat = JSON.parse(
+    normalizeRequestToolTypes(
+      JSON.stringify({
+        tools: [
+          { type: "", function: { name: "a", parameters: {} } },
+          { type: null, function: { name: "b", parameters: {} } },
+          { function: { name: "c", parameters: {} } },
+          { type: "custom", function: { name: "d", parameters: {} } },
+          { type: "" },
+        ],
+      }),
+      "openai"
+    )
+  );
+  assert.deepEqual(
+    chat.tools.map((tool: { type?: unknown }) => tool.type),
+    ["function", "function", "function", "custom", ""]
+  );
+
+  const responses = JSON.parse(
+    normalizeRequestToolTypes(
+      JSON.stringify({
+        tools: [
+          { type: " ", name: "lookup", parameters: {} },
+          { type: "web_search_preview" },
+        ],
+      }),
+      "openai-responses"
+    )
+  );
+  assert.deepEqual(
+    responses.tools.map((tool: { type?: unknown }) => tool.type),
+    ["function", "web_search_preview"]
+  );
+
+  const anthropic = JSON.stringify({
+    tools: [{ type: "", name: "lookup", input_schema: {} }],
+  });
+  assert.equal(
+    normalizeRequestToolTypes(anthropic, "anthropic"),
+    anthropic
   );
 });

@@ -5,6 +5,7 @@ import {
   rewriteModel,
   upstreamPathForProtocol,
   inferProtocolFromPath,
+  normalizeRequestToolTypes,
   extractModel,
   requestStreamUsage,
 } from "./format";
@@ -382,7 +383,11 @@ export async function relayRequest(
       };
     }
   }
-  const outBody = requestStreamUsage(convertedRequestBody, backendProtocol);
+  const normalizedToolBody = normalizeRequestToolTypes(
+    convertedRequestBody,
+    backendProtocol
+  );
+  const outBody = requestStreamUsage(normalizedToolBody, backendProtocol);
   const backendRequestedStream = requestBodyStreams(outBody);
   if (plan.routed && !backendRequestedStream) {
     // 路由后以目标协议的 body 为准；不要让客户端遗留的 Accept 诱导兼容

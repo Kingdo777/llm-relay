@@ -203,3 +203,49 @@ export function requestStreamUsage(body: string, protocol: Protocol): string {
     return body;
   }
 }
+
+/**
+ * 修正兼容客户端生成的空工具类型。
+ *
+ * 仅当对象结构能明确判断为 function 工具，且 type 缺失、null 或空白时
+ * 补成标准值；非空未知类型保持原样，交由上游返回准确错误。
+ */
+export function normalizeRequestToolTypes(
+  body: string,
+  protocol: Protocol
+): string {
+  if (protocol === "anthropic" || !body.trim()) return body;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return body;
+  const request = parsed as Record<string, unknown>;
+  if (!Array.isArray(request.tools)) return body;
+
+  let changed = false;
+  for (const rawTool of request.tools) {
+    if (!rawTool || typeof rawTool !== "object" || Array.isArray(rawTool)) continue;
+    const tool = rawTool as Record<string, unknown>;
+    const missingType =
+      tool.type === undefined ||
+      tool.type === null ||
+      (typeof tool.type === "string" && tool.type.trim() === "");
+    if (!missingType) continue;
+
+    const isChatFunction =
+      protocol === "openai" &&
+      !!tool.function &&
+      typeof tool.function === "object" &&
+      !Array.isArray(tool.function);
+    const isResponsesFunction =
+      protocol === "openai-responses" && typeof tool.name === "string";
+    if (isChatFunction || isResponsesFunction) {
+      tool.type = "function";
+      changed = true;
+    }
+  }
+  return changed ? JSON.stringify(request) : body;
+}

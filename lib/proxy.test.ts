@@ -288,4 +288,54 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
   const mismatchError = await mismatched.response.json();
   assert.match(mismatchError.error.message, /忽略 stream=false 并返回 SSE/);
   assert.equal(database.getLog(mismatched.logId!)?.status, "failed");
+
+  let directToolBody: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    directToolBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+      string,
+      unknown
+    >;
+    return Response.json({
+      id: "chatcmpl_tool_type",
+      object: "chat.completion",
+      model: "upstream-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    });
+  };
+  const normalizedToolRequest = await relayRequest(
+    llm,
+    {
+      clientProtocol: "openai",
+      backendProtocol: "openai",
+      baseUrl: llm.openai_base_url,
+      routed: false,
+    },
+    "POST",
+    new Headers({ "content-type": "application/json" }),
+    JSON.stringify({
+      model: llm.alias,
+      messages: [{ role: "user", content: "hi" }],
+      tools: [
+        {
+          type: "",
+          function: {
+            name: "alarm_lookup",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    })
+  );
+  assert.equal(normalizedToolRequest.response.status, 200);
+  const forwardedTools = directToolBody.tools as Array<{
+    type: string;
+  }>;
+  assert.equal(forwardedTools[0].type, "function");
 });
