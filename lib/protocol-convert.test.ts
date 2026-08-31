@@ -484,27 +484,30 @@ test("request conversion ignores unknown extensions but still rejects invalid co
     role: "system",
     content: "cached",
   });
-  assert.throws(
-    () =>
-      convertAnthropicRequestToOpenAIChat({
-        model: "m",
-        max_tokens: 10,
-        messages: [
+  const failedToolResult = convertAnthropicRequestToOpenAIChat({
+    model: "m",
+    max_tokens: 10,
+    messages: [
+      {
+        role: "user",
+        content: [
           {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_1",
-                content: "failed",
-                is_error: true,
-              },
-            ],
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: "failed: command exited with status 1",
+            is_error: true,
           },
         ],
-      }),
-    /错误工具结果/
-  );
+      },
+    ],
+  });
+  assert.deepEqual(failedToolResult.messages, [
+    {
+      role: "tool",
+      tool_call_id: "toolu_1",
+      content: "failed: command exited with status 1",
+    },
+  ]);
   assert.throws(
     () =>
       convertOpenAIChatRequestToAnthropic({

@@ -718,18 +718,15 @@ export function convertAnthropicRequestToOpenAIChat(value: unknown): JsonObject 
         }
         if (block.type === "tool_result") {
           if (isPresent(block.is_error)) {
-            const isError = booleanAt(
+            booleanAt(
               block.is_error,
               ANT_TO_OAI,
               `${blockPath}.is_error`
             );
-            if (isError) {
-              fail(
-                ANT_TO_OAI,
-                `${blockPath}.is_error`,
-                "OpenAI Chat 无法无损表达 Anthropic 错误工具结果"
-              );
-            }
+            // OpenAI Chat has no standard is_error flag on role=tool. Keep the
+            // original tool output verbatim so the model still sees the error
+            // details, but do not forward a non-standard field that strict
+            // OpenAI-compatible backends may reject.
           }
           if (sawText) {
             fail(
