@@ -482,7 +482,9 @@ if (process.env.NODE_ENV !== "production") {
 const now = () => new Date().toISOString();
 
 export function listLlms(): LlmRow[] {
-	return db.prepare(`${llmSelect} ORDER BY id ASC`).all() as LlmRow[];
+	return db
+		.prepare(`${llmSelect} ORDER BY name COLLATE BINARY ASC, id ASC`)
+		.all() as LlmRow[];
 }
 
 export function getLlm(id: number): LlmRow | undefined {

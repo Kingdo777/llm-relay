@@ -165,6 +165,35 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
   assert.equal(appIdIsNotAProviderMarker.is_code_agent, 0);
   assert.equal(appIdIsNotAProviderMarker.route_mode, "openai-to-anthropic");
 
+  const alphabeticallyFirst = database.createLlm({
+    name: "Alpha provider",
+    alias: "alpha-provider",
+    url_mode: "unified",
+    base_url: "https://alpha.example",
+    token: "token",
+    model_name: "alpha-model",
+  });
+  const lowercaseName = database.createLlm({
+    name: "alpha provider",
+    alias: "lowercase-alpha-provider",
+    url_mode: "unified",
+    base_url: "https://lowercase-alpha.example",
+    token: "token",
+    model_name: "lowercase-alpha-model",
+  });
+  assert.deepEqual(
+    database.listLlms().map((llm) => llm.name),
+    [
+      "Alpha provider",
+      "CodeAgent",
+      "CodeAgent Fast",
+      "Ordinary provider",
+      "alpha provider",
+    ]
+  );
+  assert.equal(database.deleteLlm(alphabeticallyFirst.id), true);
+  assert.equal(database.deleteLlm(lowercaseName.id), true);
+
   assert.throws(
     () =>
       database.createLlm({
