@@ -129,10 +129,40 @@ npm run start      # 生产启动
 
 ## 容器镜像
 
+镜像分成依赖 base 和应用两部分。base 包含 Node.js、Python 3 和 npm 构建依赖
+（包括 better-sqlite3 原生模块）；应用构建只复制源码、执行 Next.js 编译并移除开发依赖，
+不再执行 `apt-get` 或 `npm ci`。
+
+首次构建，或修改 `package.json`、`package-lock.json`、`.npmrc`、Node.js 版本及系统依赖后，
+先构建 base。只修改应用代码时可以直接复用已有 base：
+
 ```bash
+# 首次执行；base 的镜像名和 tag 可自行指定
+docker build -f Dockerfile.Base -t llm-relay-base:latest .
+
+# 日常只需构建应用（默认 BASE_IMAGE=llm-relay-base:latest）
 docker build -t registry.cn-hangzhou.aliyuncs.com/kingdo/nvwa-llm-relay:latest .
 docker run -d --name nvwa-llm-relay -p 3001:3001 -v llm-relay-data:/data registry.cn-hangzhou.aliyuncs.com/kingdo/nvwa-llm-relay:latest
 ```
+
+通过 `--build-arg BASE_IMAGE=...` 选择自定义 base 镜像（支持仓库地址和版本 tag）：
+
+```bash
+BASE_IMAGE=your-registry/llm-relay-base:node22-v1
+docker build -f Dockerfile.Base -t "$BASE_IMAGE" .
+docker build --build-arg BASE_IMAGE="$BASE_IMAGE" \
+  -t llm-relay:latest .
+```
+
+需要定制基础环境时，覆盖 `Dockerfile.Base` 即可，应用 Dockerfile 无需修改。
+自定义 base 需提供 Node.js、Python 3、`/app/node_modules` 中的完整构建依赖，以及
+`/usr/local/share/llm-relay-base-deps.sha256` 中的依赖清单校验值（生成方式见 `Dockerfile.Base`）。
+原生模块的构建和运行环境需保持 Node.js 主版本、Debian 版本及目标架构一致。
+
+base 可推送到对应仓库后在其他构建机器复用，也可通过 `docker save` / `docker load` 离线导入。
+应用构建校验 base 中的依赖清单；清单不一致时会明确报错，需重建 base 并更新 `BASE_IMAGE`。
+建议 base 使用版本 tag，避免不同依赖版本相互覆盖。
+base 保留完整构建依赖以便复用，因此应用中移除开发依赖不会缩小已共享的 base 层。
 
 NVWA 节点安装器会把容器内固定端口 `3001` 映射到节点上的动态空闲端口。
 `GET /api/models` 仅返回已启用模型的安全元数据和 alias，不返回上游 Token；

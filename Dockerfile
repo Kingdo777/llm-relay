@@ -1,22 +1,17 @@
-FROM node:22-bookworm AS build
+ARG BASE_IMAGE=llm-relay-base:latest
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
-RUN npm ci
+RUN sha256sum -c /usr/local/share/llm-relay-base-deps.sha256 \
+    || (echo "Dependencies changed or incompatible base image; rebuild Dockerfile.Base and set BASE_IMAGE to the new image." >&2; exit 1)
 COPY . .
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-bookworm-slim
+RUN npm run build && npm prune --omit=dev --offline --ignore-scripts --no-audit --no-fund
 
 ENV NODE_ENV=production \
     PORT=3001 \
     HOSTNAME=0.0.0.0 \
     DATA_DIR=/data
-WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=build /app ./
 RUN mkdir -p /data
 VOLUME ["/data"]
 EXPOSE 3001
