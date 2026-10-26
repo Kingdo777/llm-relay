@@ -35,7 +35,7 @@ const globalForDb = globalThis as unknown as {
   __db?: Database.Database;
 };
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 function createDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -329,6 +329,17 @@ function migrateSchema(db: Database.Database, fromVersion: number) {
       }
     }
   }
+  if (fromVersion < 16) {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(logs)").all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!columns.has("input_bytes")) {
+      // 旧 input 可能已压缩或截断，无法可靠回填原始请求体大小。
+      db.exec("ALTER TABLE logs ADD COLUMN input_bytes INTEGER");
+    }
+  }
 }
 
 /** 一次性修正可从现存响应可靠恢复的缓存用量与旧版 CodeAgent 双算。 */
@@ -424,6 +435,7 @@ function createTables(db: Database.Database) {
       endpoint     TEXT NOT NULL,
       model_name   TEXT,
       input        TEXT,
+      input_bytes  INTEGER,
       output       TEXT,
       status       TEXT NOT NULL,
       error        TEXT,
@@ -747,6 +759,7 @@ export interface LogInsert {
   endpoint: string;
   model_name: string | null;
   input: string | null;
+  input_bytes: number;
   output: string | null;
   status: "success" | "failed" | "streaming";
   error: string | null;
@@ -759,8 +772,8 @@ export function insertLog(log: LogInsert): number {
   return db.transaction(() => {
     const info = db.prepare(
       `INSERT INTO logs
-         (llm_id, llm_alias, protocol, base_url, endpoint, model_name, input, output, status, error, duration_ms, status_code, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (llm_id, llm_alias, protocol, base_url, endpoint, model_name, input, input_bytes, output, status, error, duration_ms, status_code, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       log.llm_id,
       log.llm_alias,
@@ -769,6 +782,7 @@ export function insertLog(log: LogInsert): number {
       log.endpoint,
       log.model_name,
       log.input,
+      log.input_bytes,
       log.output,
       log.status,
       log.error,

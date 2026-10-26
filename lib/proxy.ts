@@ -37,6 +37,8 @@ const MAX_INPUT_LEN = 200_000;
 const MAX_SSE_INSPECTION_EVENT_LEN = 1024 * 1024;
 /** 超大事件只检查开头的标准 event/data 元数据。 */
 const MAX_SSE_METADATA_PREFIX_LEN = 4096;
+/** 缺少 [DONE] 时最多跟踪这些 OpenAI choice，避免兼容状态无界增长。 */
+const MAX_OPENAI_EOF_CHOICE_COUNT = 128;
 
 function clamp(s: string, max: number): string {
   if (s.length <= max) return s;
@@ -126,16 +128,22 @@ class SseStreamInspection {
   private discardingOversizedEvent = false;
   private oversizedMetadata: { terminal: boolean; failed: boolean } | null = null;
   private terminalSeen = false;
+  private readonly openAIChoiceCompletion = new Map<number, boolean>();
+  private invalidOpenAIEvent = false;
   usage: ParsedUsage | null = null;
   error: string | null = null;
 
-  constructor(private readonly protocol: Protocol) {}
+  constructor(
+    private readonly protocol: Protocol,
+    private readonly expectedOpenAIChoices: number | null = null
+  ) {}
 
   push(value: string): void {
     if (!value) return;
     this.buffer += value;
     this.drain(false);
     if (this.buffer.length > MAX_SSE_INSPECTION_EVENT_LEN) {
+      if (this.protocol === "openai") this.invalidOpenAIEvent = true;
       if (!this.discardingOversizedEvent) {
         this.oversizedMetadata = this.readEventMetadata(
           this.buffer.slice(0, MAX_SSE_METADATA_PREFIX_LEN)
@@ -155,6 +163,11 @@ class SseStreamInspection {
   missingTerminalError(): string | null {
     if (this.terminalSeen) return null;
     if (this.protocol === "openai") {
+      if (this.hasCompleteOpenAIChoices()) {
+        // Some OpenAI-compatible servers close the SSE connection immediately
+        // after a final chunk instead of sending the [DONE] sentinel.
+        return null;
+      }
       return "OpenAI SSE 在 [DONE] 前结束";
     }
     if (this.protocol === "anthropic") {
@@ -163,13 +176,31 @@ class SseStreamInspection {
     return "Responses SSE 在终止事件前结束";
   }
 
+  hasTerminalEvent(): boolean {
+    return this.terminalSeen;
+  }
+
+  hasCompleteOpenAIChoices(): boolean {
+    if (
+      this.protocol !== "openai" ||
+      this.expectedOpenAIChoices === null ||
+      this.invalidOpenAIEvent ||
+      this.openAIChoiceCompletion.size !== this.expectedOpenAIChoices
+    ) {
+      return false;
+    }
+    return [...this.openAIChoiceCompletion.values()].every(Boolean);
+  }
+
   private drain(final: boolean): void {
     while (true) {
       const match = /\r?\n\r?\n/.exec(this.buffer);
       if (!match || match.index === undefined) break;
       if (this.discardingOversizedEvent) {
+        if (this.protocol === "openai") this.invalidOpenAIEvent = true;
         this.applyEventMetadata(this.oversizedMetadata);
       } else if (match.index > MAX_SSE_INSPECTION_EVENT_LEN) {
+        if (this.protocol === "openai") this.invalidOpenAIEvent = true;
         this.applyEventMetadata(
           this.readEventMetadata(
             this.buffer.slice(0, MAX_SSE_METADATA_PREFIX_LEN)
@@ -216,7 +247,65 @@ class SseStreamInspection {
     }
     const data = dataLines.join("\n").trim();
     if (this.protocol === "openai") {
-      if (data === "[DONE]") this.terminalSeen = true;
+      if (data === "[DONE]") {
+        this.terminalSeen = true;
+        return;
+      }
+      // SSE comments and empty data events are transport keepalives.
+      if (!data) return;
+      try {
+        const parsed = JSON.parse(data) as Record<string, unknown>;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          this.invalidOpenAIEvent = true;
+          return;
+        }
+        // Compatible providers may emit usage or metadata-only JSON events.
+        if (!("choices" in parsed)) return;
+        if (!Array.isArray(parsed.choices)) {
+          this.invalidOpenAIEvent = true;
+          return;
+        }
+        for (const [position, value] of parsed.choices.entries()) {
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            this.invalidOpenAIEvent = true;
+            continue;
+          }
+          const choice = value as Record<string, unknown>;
+          let index: number;
+          if (
+            typeof choice.index === "number" &&
+            Number.isInteger(choice.index)
+          ) {
+            index = choice.index;
+          } else if (
+            choice.index === undefined &&
+            this.expectedOpenAIChoices === 1 &&
+            parsed.choices.length === 1
+          ) {
+            index = position;
+          } else {
+            this.invalidOpenAIEvent = true;
+            continue;
+          }
+          if (
+            this.expectedOpenAIChoices === null ||
+            index < 0 ||
+            index >= this.expectedOpenAIChoices
+          ) {
+            this.invalidOpenAIEvent = true;
+            continue;
+          }
+          const completed =
+            typeof choice.finish_reason === "string" &&
+            choice.finish_reason.length > 0;
+          // The latest event is authoritative. Output after a finish_reason
+          // invalidates the EOF fallback unless that event is terminal too.
+          this.openAIChoiceCompletion.set(index, completed);
+        }
+      } catch {
+        // Malformed trailing data means EOF cannot safely stand in for [DONE].
+        this.invalidOpenAIEvent = true;
+      }
       return;
     }
 
@@ -343,6 +432,7 @@ export async function relayRequest(
     endpoint: subPath,
     model_name: llm.model_name,
     input: compactLogInput(rawBody, MAX_INPUT_LEN),
+    input_bytes: Buffer.byteLength(rawBody, "utf8"),
     output: null,
     status: "streaming",
     error: plan.routed ? `跨格式转换：${routeDescription(plan)}` : null,
@@ -472,7 +562,10 @@ export async function relayRequest(
       ? createRoutedStreamConverter(plan, llm, conversionContext!)
       : null;
     const logOutput = new BoundedLogOutput(MAX_OUTPUT_LEN);
-    const inspection = new SseStreamInspection(backendProtocol);
+    const inspection = new SseStreamInspection(
+      backendProtocol,
+      expectedOpenAIChoiceCount(outBody, backendProtocol)
+    );
     let finalized = false;
     let streamError = "";
     let firstByteMs: number | null = null;
@@ -519,30 +612,38 @@ export async function relayRequest(
       });
     };
 
+    const finishAtUpstreamEnd = (
+      controller: ReadableStreamDefaultController<Uint8Array>
+    ) => {
+      const rawTail = rawDecoder.decode();
+      inspection.finish(rawTail);
+      if (!streamConverter) logOutput.append(rawTail);
+      if (streamConverter) {
+        const tail = streamConverter.finish();
+        if (tail) {
+          logOutput.append(tail);
+          controller.enqueue(encoder.encode(tail));
+        }
+        if (streamConverter.didFail?.()) {
+          streamError = "上游流返回错误事件";
+        }
+      }
+      terminated = true;
+      controller.close();
+      finalize();
+    };
+
     const consumeNext = async (
       controller: ReadableStreamDefaultController<Uint8Array>
     ): Promise<boolean> => {
       if (terminated) return true;
+      let awaitingRead = true;
       try {
         const { done, value } = await reader.read();
+        awaitingRead = false;
         if (terminated) return true;
         if (done) {
-          const rawTail = rawDecoder.decode();
-          inspection.finish(rawTail);
-          if (!streamConverter) logOutput.append(rawTail);
-          if (streamConverter) {
-            const tail = streamConverter.finish();
-            if (tail) {
-              logOutput.append(tail);
-              controller.enqueue(encoder.encode(tail));
-            }
-            if (streamConverter.didFail?.()) {
-              streamError = "上游流返回错误事件";
-            }
-          }
-          terminated = true;
-          controller.close();
-          finalize();
+          finishAtUpstreamEnd(controller);
           return true;
         }
         if (firstByteMs === null && value.byteLength > 0) {
@@ -572,13 +673,39 @@ export async function relayRequest(
           logOutput.append(rawText);
           controller.enqueue(value);
         }
+        if (inspection.hasTerminalEvent()) {
+          // Protocol completion is authoritative. Do not wait for another
+          // transport read that can turn a valid terminal frame into an
+          // ECONNRESET/"terminated" failure.
+          terminated = true;
+          controller.close();
+          finalize();
+          void reader.cancel("SSE terminal event received").catch(() => {});
+          return true;
+        }
         return false;
       } catch (error) {
         if (terminated) return true;
-        streamError = (error as Error).message;
+        let failure = error;
+        if (
+          awaitingRead &&
+          !clientSignal?.aborted &&
+          !inspection.error &&
+          inspection.hasCompleteOpenAIChoices()
+        ) {
+          try {
+            // The model response is semantically complete. Normalize a reset
+            // in place of the final [DONE]/TCP FIN as an ordinary EOF.
+            finishAtUpstreamEnd(controller);
+            return true;
+          } catch (finishError) {
+            failure = finishError;
+          }
+        }
+        streamError = (failure as Error).message;
         terminated = true;
         try {
-          await reader.cancel(error);
+          await reader.cancel(failure);
         } catch {
           // 转换失败后尽力终止上游，cancel 自身错误不覆盖原始原因。
         }
@@ -594,7 +721,7 @@ export async function relayRequest(
           }
           controller.close();
         } else {
-          controller.error(error);
+          controller.error(failure);
         }
         finalize();
         return true;
@@ -762,6 +889,29 @@ export async function relayRequest(
     }),
     logId,
   };
+}
+
+function expectedOpenAIChoiceCount(
+  body: string,
+  protocol: Protocol
+): number | null {
+  if (protocol !== "openai") return null;
+  try {
+    const value = JSON.parse(body) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    const parsed = value as Record<string, unknown>;
+    if (parsed.n === undefined || parsed.n === null) return 1;
+    return typeof parsed.n === "number" &&
+      Number.isSafeInteger(parsed.n) &&
+      parsed.n > 0 &&
+      parsed.n <= MAX_OPENAI_EOF_CHOICE_COUNT
+      ? parsed.n
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function requestBodyStreams(body: string): boolean {

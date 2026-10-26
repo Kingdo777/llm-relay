@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 
-test("v15 migration backfills CodeAgent identity from legacy app_id once", async (t) => {
+test("v14 database migrates CodeAgent identity and input byte schema", async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), "llm-relay-v14-migration-"));
   const previousDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = dataDir;
@@ -97,6 +97,11 @@ test("v15 migration backfills CodeAgent identity from legacy app_id once", async
     timestamp,
     timestamp
   );
+  legacy.prepare(
+    `INSERT INTO logs
+      (id, llm_id, llm_alias, status, duration_ms, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(101, 1, "legacy-code-agent", "success", 12, timestamp);
   legacy.close();
 
   const database = await import("./db");
@@ -113,7 +118,15 @@ test("v15 migration backfills CodeAgent identity from legacy app_id once", async
         version: number;
       }
     ).version,
-    15
+    16
+  );
+  assert.equal(
+    (
+      database.db
+        .prepare("SELECT input_bytes FROM logs WHERE id = ?")
+        .get(101) as { input_bytes: number | null }
+    ).input_bytes,
+    null
   );
   assert.equal(database.getLlmByAlias("legacy-code-agent")?.is_code_agent, 1);
   assert.equal(

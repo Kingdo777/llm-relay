@@ -105,6 +105,8 @@ export interface LogRow {
   endpoint: string;
   model_name: string | null;
   input: string | null;
+  /** 客户端原始请求体的 UTF-8 字节数；旧日志未记录时为 null */
+  input_bytes: number | null;
   output: string | null;
   status: "success" | "failed" | "streaming";
   error: string | null;

@@ -31,17 +31,26 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
     enabled: true,
   });
 
-  const runDirect = async (protocol: Protocol, body: string | string[]) => {
+  const runDirect = async (
+    protocol: Protocol,
+    body: string | string[],
+    customResponseBody?: ReadableStream<Uint8Array>,
+    requestOverrides: Record<string, unknown> = {}
+  ) => {
     const expectedBody = Array.isArray(body) ? body.join("") : body;
-    const responseBody = Array.isArray(body)
-      ? new ReadableStream<Uint8Array>({
-          start(controller) {
-            const encoder = new TextEncoder();
-            for (const chunk of body) controller.enqueue(encoder.encode(chunk));
-            controller.close();
-          },
-        })
-      : body;
+    const requestBody = JSON.stringify({ ...requestOverrides, model: llm.alias });
+    const expectedInputBytes = new TextEncoder().encode(requestBody).byteLength;
+    const responseBody =
+      customResponseBody ??
+      (Array.isArray(body)
+        ? new ReadableStream<Uint8Array>({
+            start(controller) {
+              const encoder = new TextEncoder();
+              for (const chunk of body) controller.enqueue(encoder.encode(chunk));
+              controller.close();
+            },
+          })
+        : body);
     globalThis.fetch = async () =>
       new Response(responseBody, {
         status: 200,
@@ -60,10 +69,12 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
       },
       "POST",
       new Headers({ "content-type": "application/json" }),
-      JSON.stringify({ model: llm.alias })
+      requestBody
     );
     assert.equal(await result.response.text(), expectedBody);
-    return database.getLog(result.logId!);
+    const storedLog = database.getLog(result.logId!);
+    assert.equal(storedLog?.input_bytes, expectedInputBytes);
+    return storedLog;
   };
   const startUsage =
     'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2}}}\n\n';
@@ -143,11 +154,200 @@ test("bounds SSE logs while preserving passthrough and incremental usage/error",
   assert.equal(completedOpenAiLog?.status, "success");
   assert.equal(completedOpenAiLog?.total_tokens, 5);
 
+  const unicodeInput = `你好🌍${"界".repeat(200_100)}`;
+  const unicodeInputLog = await runDirect(
+    "openai",
+    openAiUsageThenDone,
+    undefined,
+    { messages: [{ role: "user", content: unicodeInput }] }
+  );
+  assert.ok((unicodeInputLog?.input_bytes ?? 0) > unicodeInput.length);
+  assert.match(unicodeInputLog?.input ?? "", /已截断/);
+
+  const terminalBeforeBrokenTransport =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+    "data: [DONE]\n\n";
+  let upstreamPulls = 0;
+  const terminalLog = await runDirect(
+    "openai",
+    terminalBeforeBrokenTransport,
+    new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          upstreamPulls += 1;
+          if (upstreamPulls === 1) {
+            controller.enqueue(
+              new TextEncoder().encode(terminalBeforeBrokenTransport)
+            );
+          } else {
+            controller.error(new TypeError("terminated"));
+          }
+        },
+      },
+      { highWaterMark: 0 }
+    )
+  );
+  assert.equal(upstreamPulls, 1);
+  assert.equal(terminalLog?.status, "success");
+
   const missingOpenAiTerminal =
     'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n';
   const truncatedOpenAiLog = await runDirect("openai", missingOpenAiTerminal);
   assert.equal(truncatedOpenAiLog?.status, "failed");
   assert.match(truncatedOpenAiLog?.error ?? "", /\[DONE\]/);
+
+  const finishReasonWithoutDone =
+    'data: {"choices":[{"index":0,"delta":{"content":"complete"},"finish_reason":null}]}\n\n' +
+    ": keep-alive\n\n" +
+    'data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n' +
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}';
+  const compatibleOpenAiLog = await runDirect(
+    "openai",
+    finishReasonWithoutDone
+  );
+  assert.equal(compatibleOpenAiLog?.status, "success");
+  assert.equal(compatibleOpenAiLog?.error, null);
+
+  const oneOfTwoChoices =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n';
+  const incompleteMultiChoiceLog = await runDirect(
+    "openai",
+    oneOfTwoChoices,
+    undefined,
+    { n: 2 }
+  );
+  assert.equal(incompleteMultiChoiceLog?.status, "failed");
+  assert.match(incompleteMultiChoiceLog?.error ?? "", /\[DONE\]/);
+
+  const invalidChoiceIndex =
+    'data: {"choices":[{"index":"bad","delta":{},"finish_reason":"stop"}]}\n\n';
+  const invalidChoiceIndexLog = await runDirect("openai", invalidChoiceIndex);
+  assert.equal(invalidChoiceIndexLog?.status, "failed");
+  assert.match(invalidChoiceIndexLog?.error ?? "", /\[DONE\]/);
+
+  const bothChoices =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"},{"index":1,"delta":{},"finish_reason":"length"}]}\n\n';
+  const completeMultiChoiceLog = await runDirect(
+    "openai",
+    bothChoices,
+    undefined,
+    { n: 2 }
+  );
+  assert.equal(completeMultiChoiceLog?.status, "success");
+
+  const excessiveChoices = `data: ${JSON.stringify({
+    choices: Array.from({ length: 129 }, (_, index) => ({
+      index,
+      delta: {},
+      finish_reason: "stop",
+    })),
+  })}\n\n`;
+  const excessiveChoicesLog = await runDirect(
+    "openai",
+    excessiveChoices,
+    undefined,
+    { n: 129 }
+  );
+  assert.equal(excessiveChoicesLog?.status, "failed");
+  assert.match(excessiveChoicesLog?.error ?? "", /\[DONE\]/);
+
+  const outputAfterFinish =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+    'data: {"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":null}]}\n\n';
+  const outputAfterFinishLog = await runDirect("openai", outputAfterFinish);
+  assert.equal(outputAfterFinishLog?.status, "failed");
+  assert.match(outputAfterFinishLog?.error ?? "", /\[DONE\]/);
+
+  const truncatedOutputAfterFinish =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+    'data: {"choices":[{"index":0,"delta":{"content":"late';
+  const truncatedOutputAfterFinishLog = await runDirect(
+    "openai",
+    truncatedOutputAfterFinish
+  );
+  assert.equal(truncatedOutputAfterFinishLog?.status, "failed");
+  assert.match(truncatedOutputAfterFinishLog?.error ?? "", /\[DONE\]/);
+
+  const oversizedOutputAfterFinish =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+    `data: ${"x".repeat(1024 * 1024 + 32)}`;
+  const oversizedOutputAfterFinishLog = await runDirect(
+    "openai",
+    oversizedOutputAfterFinish
+  );
+  assert.equal(oversizedOutputAfterFinishLog?.status, "failed");
+  assert.match(oversizedOutputAfterFinishLog?.error ?? "", /\[DONE\]/);
+
+  const finishReasonBeforeReset =
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n';
+  let resetAfterFinishPulls = 0;
+  const resetAfterFinishLog = await runDirect(
+    "openai",
+    finishReasonBeforeReset,
+    new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          resetAfterFinishPulls += 1;
+          if (resetAfterFinishPulls === 1) {
+            controller.enqueue(
+              new TextEncoder().encode(finishReasonBeforeReset)
+            );
+          } else {
+            controller.error(new TypeError("terminated"));
+          }
+        },
+      },
+      { highWaterMark: 0 }
+    )
+  );
+  assert.equal(resetAfterFinishPulls, 2);
+  assert.equal(resetAfterFinishLog?.status, "success");
+
+  const routedFinishBeforeReset =
+    'data: {"id":"chatcmpl-routed-reset","model":"upstream-model","choices":[{"index":0,"delta":{"role":"assistant","content":"routed complete"},"finish_reason":"stop"}]}\n\n';
+  let routedResetPulls = 0;
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            routedResetPulls += 1;
+            if (routedResetPulls === 1) {
+              controller.enqueue(
+                new TextEncoder().encode(routedFinishBeforeReset)
+              );
+            } else {
+              controller.error(new TypeError("terminated"));
+            }
+          },
+        },
+        { highWaterMark: 0 }
+      ),
+      { headers: { "content-type": "text/event-stream" } }
+    );
+  const routedReset = await relayRequest(
+    llm,
+    {
+      clientProtocol: "anthropic",
+      backendProtocol: "openai",
+      baseUrl: llm.openai_base_url,
+      routed: true,
+    },
+    "POST",
+    new Headers({ "content-type": "application/json" }),
+    JSON.stringify({
+      model: llm.alias,
+      max_tokens: 16,
+      stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    })
+  );
+  const routedResetOutput = await routedReset.response.text();
+  assert.equal(routedResetPulls, 2);
+  assert.match(routedResetOutput, /routed complete/);
+  assert.match(routedResetOutput, /event: message_stop/);
+  assert.doesNotMatch(routedResetOutput, /event: error/);
+  assert.equal(database.getLog(routedReset.logId!)?.status, "success");
 
   const missingAnthropicTerminal =
     'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n';

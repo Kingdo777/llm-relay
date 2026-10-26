@@ -43,7 +43,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
         version: number;
       }
     ).version,
-    15
+    16
   );
 
   const initialRows = database.listLlms();
@@ -232,6 +232,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     endpoint: "v1/chat/completions",
     model_name: updatedRows[0].model_name,
     input: "{}",
+    input_bytes: 2,
     output: null,
     status: "streaming",
     error: null,
@@ -245,6 +246,7 @@ test("atomically upserts a list of LLMs by alias", async (t) => {
     total_tokens: 120,
     cached_input_tokens: 40,
   });
+  assert.equal(database.getLog(logId)?.input_bytes, 2);
   assert.equal(database.getLog(logId)?.cached_input_tokens, 40);
   assert.equal(
     (

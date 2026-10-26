@@ -140,6 +140,21 @@ export function LogList() {
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
+  function fmtBytes(bytes: number | null) {
+    if (bytes == null) return "—";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(2)} KiB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+    return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+  }
+
+  function fmtExactBytes(bytes: number | null) {
+    if (bytes == null) return "旧日志未记录";
+    const exact = `${bytes.toLocaleString("zh-CN")} B`;
+    const compact = fmtBytes(bytes);
+    return compact === `${bytes} B` ? exact : `${compact}（${exact}）`;
+  }
+
   function cacheHitRate(row: LogRow): string | null {
     if (
       row.cached_input_tokens == null ||
@@ -264,6 +279,7 @@ export function LogList() {
                 <th>状态</th>
                 <th>流式</th>
                 <th>HTTP</th>
+                <th>输入大小</th>
                 <th>Token</th>
                 <th>缓存命中</th>
                 <th>耗时</th>
@@ -296,6 +312,16 @@ export function LogList() {
                   </td>
                   <td className="mono">
                     {r.status_code != null ? r.status_code : "—"}
+                  </td>
+                  <td
+                    className="mono"
+                    title={
+                      r.input_bytes == null
+                        ? undefined
+                        : fmtExactBytes(r.input_bytes)
+                    }
+                  >
+                    {fmtBytes(r.input_bytes)}
                   </td>
                   <td className="mono">
                     {r.total_tokens != null ? r.total_tokens : "—"}
@@ -471,6 +497,15 @@ export function LogList() {
                       <div className="value mono">{detail.model_name}</div>
                     </div>
                   )}
+
+                  <div className="detail-row">
+                    <div className="label">原始请求体大小</div>
+                    <div className="value mono">
+                      {detail.input_bytes == null
+                        ? "旧日志未记录"
+                        : `${fmtExactBytes(detail.input_bytes)}（UTF-8）`}
+                    </div>
+                  </div>
 
                   <div className="detail-row">
                     <div className="label">Token 用量</div>
