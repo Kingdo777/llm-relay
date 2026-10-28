@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { strToU8, zipSync } from "fflate";
 
 const config = (version: number, llms: Array<Record<string, unknown>>) =>
   new Request("http://localhost/api/llms/import-export", {
@@ -91,7 +92,16 @@ test("config v4 exports explicit supplier identity and imports v1-v4", async (t)
 
   const exported = await route.GET();
   assert.equal(exported.status, 200);
-  const payload = (await exported.json()) as {
+  assert.equal(
+    exported.headers.get("content-type"),
+    "application/json; charset=utf-8"
+  );
+  assert.match(
+    exported.headers.get("content-disposition") ?? "",
+    /^attachment; filename="llm-relay-config-\d{4}-\d{2}-\d{2}\.json"$/
+  );
+  const exportedText = await exported.text();
+  const payload = JSON.parse(exportedText) as {
     version: number;
     llms: Array<{ alias: string; is_code_agent: boolean }>;
   };
@@ -105,6 +115,78 @@ test("config v4 exports explicit supplier identity and imports v1-v4", async (t)
       ?.is_code_agent,
     false
   );
+
+  response = await route.POST(
+    new Request("http://localhost/api/llms/import-export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: exportedText,
+    })
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    data: { created: 0, skipped: payload.llms.length },
+  });
+
+  const archive = zipSync({
+    "README.txt": strToU8("LLM relay configuration backup"),
+    "manifest.json": strToU8('{"kind":"backup"}'),
+    "backup/llm-relay-config.json": strToU8(exportedText),
+  });
+  response = await route.POST(
+    new Request("http://localhost/api/llms/import-export", {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: new Blob([archive]),
+    })
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    data: { created: 0, skipped: payload.llms.length },
+  });
+
+  const oversizedArchive = zipSync({
+    "llm-relay-config.json": strToU8(" ".repeat(2 * 1024 * 1024 + 1)),
+  });
+  response = await route.POST(
+    new Request("http://localhost/api/llms/import-export", {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: new Blob([oversizedArchive]),
+    })
+  );
+  assert.equal(response.status, 413);
+  assert.match(await response.text(), /解压后不能超过 2 MB/);
+
+  const forgedSizeArchive = overwriteZipUncompressedSizes(
+    oversizedArchive,
+    1
+  );
+  response = await route.POST(
+    new Request("http://localhost/api/llms/import-export", {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: new Blob([forgedSizeArchive]),
+    })
+  );
+  assert.equal(response.status, 413);
+  assert.match(await response.text(), /解压后不能超过 2 MB/);
+
+  const ambiguousArchive = zipSync({
+    "first.json": strToU8(exportedText),
+    "second.json": strToU8(exportedText),
+  });
+  response = await route.POST(
+    new Request("http://localhost/api/llms/import-export", {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: new Blob([ambiguousArchive]),
+    })
+  );
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /包含多个 llm-relay JSON 配置/);
 
   const modelsRoute = await import("../app/api/models/route");
   const modelsResponse = await modelsRoute.GET();
@@ -123,3 +205,18 @@ test("config v4 exports explicit supplier identity and imports v1-v4", async (t)
   assert.equal(response.status, 400);
   assert.match(await response.text(), /is_code_agent 必须是布尔值/);
 });
+
+function overwriteZipUncompressedSizes(
+  archive: Uint8Array,
+  size: number
+): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(archive.byteLength);
+  copy.set(archive);
+  const view = new DataView(copy.buffer, copy.byteOffset, copy.byteLength);
+  for (let offset = 0; offset <= copy.byteLength - 28; offset += 1) {
+    const signature = view.getUint32(offset, true);
+    if (signature === 0x04034b50) view.setUint32(offset + 22, size, true);
+    if (signature === 0x02014b50) view.setUint32(offset + 24, size, true);
+  }
+  return copy;
+}

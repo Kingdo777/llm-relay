@@ -92,21 +92,15 @@ export function LlmList() {
     }
   }
 
-  async function exportConfig() {
+  function exportConfig() {
     setTransferring("export");
     try {
-      const resp = await fetch("/api/llms/import-export");
-      if (!resp.ok) {
-        const data = await resp.json();
-        throw new Error(data.error || "导出失败");
-      }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url;
+      link.href = "/api/llms/import-export";
       link.download = `llm-relay-config-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(url);
+      link.remove();
       show(`已导出 ${list?.length ?? 0} 个 LLM 配置`, "success");
     } catch (error) {
       show(`导出失败：${(error as Error).message}`, "error");
@@ -126,10 +120,15 @@ export function LlmList() {
 
     setTransferring("import");
     try {
+      const isZip =
+        file.name.toLowerCase().endsWith(".zip") ||
+        file.type.toLowerCase().includes("zip");
       const resp = await fetch("/api/llms/import-export", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: await file.text(),
+        headers: {
+          "content-type": isZip ? "application/zip" : "application/json",
+        },
+        body: await file.arrayBuffer(),
       });
       const responseText = await resp.text();
       if (!responseText.trim()) {
@@ -380,14 +379,14 @@ export function LlmList() {
             )}
           </div>
           <div className="sub import-export-warning">
-            导出文件包含上游 Token，请妥善保管
+            支持导入 JSON / ZIP；导出文件包含上游 Token，请妥善保管
           </div>
         </div>
         <div className="page-head-actions">
           <input
             ref={importInputRef}
             type="file"
-            accept="application/json,.json"
+            accept="application/json,.json,application/zip,.zip"
             hidden
             onChange={importConfig}
           />

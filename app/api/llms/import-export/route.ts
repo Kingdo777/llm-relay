@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { importLlms, listLlms } from "@/lib/db";
 import { normalizeLlmInput } from "@/lib/llm-input";
 import type { LlmInput } from "@/lib/types";
+import { Unzip, UnzipInflate } from "fflate";
 
 const FORMAT_VERSION = 4;
 const SUPPORTED_FORMAT_VERSIONS = new Set([1, 2, 3, FORMAT_VERSION]);
 const MAX_IMPORT_COUNT = 500;
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 64;
+const ZIP_INPUT_CHUNK_BYTES = 512;
 
 /** GET /api/llms/import-export —— 下载完整 LLM 配置（包含 Token）。 */
 export async function GET() {
@@ -47,7 +50,7 @@ export async function GET() {
   );
 }
 
-/** POST /api/llms/import-export —— alias 冲突时跳过，其余新增。 */
+/** POST /api/llms/import-export —— 支持 JSON/ZIP；alias 冲突时跳过。 */
 export async function POST(req: Request) {
   const contentLength = Number(req.headers.get("content-length") ?? 0);
   if (contentLength > MAX_IMPORT_BYTES) {
@@ -59,11 +62,15 @@ export async function POST(req: Request) {
 
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
+    body = await readImportBody(req);
+  } catch (error) {
+    const importError =
+      error instanceof ImportFileError
+        ? error
+        : new ImportFileError("无法读取导入文件");
     return NextResponse.json(
-      { ok: false, error: "导入文件不是合法 JSON" },
-      { status: 400 }
+      { ok: false, error: importError.message },
+      { status: importError.status }
     );
   }
 
@@ -162,6 +169,169 @@ function invalidItem(index: number, error: string) {
     { ok: false, error: `第 ${index + 1} 项配置无效：${error}` },
     { status: 400 }
   );
+}
+
+class ImportFileError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400
+  ) {
+    super(message);
+  }
+}
+
+async function readImportBody(req: Request): Promise<unknown> {
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await req.arrayBuffer());
+  } catch {
+    throw new ImportFileError("无法读取导入文件");
+  }
+  if (bytes.byteLength > MAX_IMPORT_BYTES) {
+    throw new ImportFileError("导入文件不能超过 2 MB", 413);
+  }
+  if (isZip(bytes)) return readConfigFromZip(bytes);
+  if (req.headers.get("content-type")?.toLowerCase().includes("zip")) {
+    throw new ImportFileError("ZIP 文件损坏或格式不受支持");
+  }
+  return parseJsonBytes(bytes, "导入文件不是合法 JSON");
+}
+
+function isZip(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    return false;
+  }
+  return (
+    (bytes[2] === 0x03 && bytes[3] === 0x04) ||
+    (bytes[2] === 0x05 && bytes[3] === 0x06) ||
+    (bytes[2] === 0x07 && bytes[3] === 0x08)
+  );
+}
+
+function readConfigFromZip(bytes: Uint8Array): unknown {
+  let entryCount = 0;
+  let declaredJsonBytes = 0;
+  let actualJsonBytes = 0;
+  let failure: ImportFileError | null = null;
+  const files: Uint8Array[] = [];
+  const unzip = new Unzip((file) => {
+    entryCount += 1;
+    if (entryCount > MAX_ZIP_ENTRIES) {
+      throw new ImportFileError(
+        `ZIP 文件条目不能超过 ${MAX_ZIP_ENTRIES} 个`
+      );
+    }
+
+    const normalizedName = file.name.replaceAll("\\", "/");
+    const pathParts = normalizedName.split("/");
+    const fileName = pathParts.at(-1) ?? "";
+    const isMetadata =
+      pathParts.includes("__MACOSX") || fileName.startsWith("._");
+    const isJson =
+      !isMetadata &&
+      !normalizedName.endsWith("/") &&
+      fileName.toLowerCase().endsWith(".json");
+    if (!isJson) return;
+
+    if (file.originalSize !== undefined) {
+      declaredJsonBytes += file.originalSize;
+      if (
+        file.originalSize > MAX_IMPORT_BYTES ||
+        declaredJsonBytes > MAX_IMPORT_BYTES
+      ) {
+        throw new ImportFileError(
+          "ZIP 中的 JSON 配置解压后不能超过 2 MB",
+          413
+        );
+      }
+    }
+
+    let fileBytes = 0;
+    const chunks: Uint8Array[] = [];
+    file.ondata = (error, chunk, final) => {
+      if (failure) {
+        file.terminate();
+        return;
+      }
+      if (error) {
+        failure = new ImportFileError("ZIP 文件损坏或格式不受支持");
+        file.terminate();
+        return;
+      }
+      fileBytes += chunk.byteLength;
+      actualJsonBytes += chunk.byteLength;
+      if (
+        fileBytes > MAX_IMPORT_BYTES ||
+        actualJsonBytes > MAX_IMPORT_BYTES
+      ) {
+        failure = new ImportFileError(
+          "ZIP 中的 JSON 配置解压后不能超过 2 MB",
+          413
+        );
+        file.terminate();
+        return;
+      }
+      if (chunk.byteLength > 0) chunks.push(chunk.slice());
+      if (final) files.push(concatBytes(chunks, fileBytes));
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+
+  try {
+    for (let offset = 0; offset < bytes.byteLength && !failure; ) {
+      const end = Math.min(offset + ZIP_INPUT_CHUNK_BYTES, bytes.byteLength);
+      unzip.push(bytes.subarray(offset, end), end === bytes.byteLength);
+      offset = end;
+    }
+  } catch (error) {
+    if (error instanceof ImportFileError) throw error;
+    throw new ImportFileError("ZIP 文件损坏或格式不受支持");
+  }
+  if (failure) throw failure;
+
+  const configs: unknown[] = [];
+  for (const data of files) {
+    try {
+      const value = parseJsonBytes(data, "ZIP 中的 JSON 文件格式无效");
+      if (isRecord(value) && value.format === "llm-relay-config") {
+        configs.push(value);
+      }
+    } catch {
+      // ZIP 可以包含说明或元数据 JSON；只选择合法的 llm-relay 配置。
+    }
+  }
+  if (configs.length === 0) {
+    throw new ImportFileError("ZIP 中没有找到 llm-relay JSON 配置");
+  }
+  if (configs.length > 1) {
+    throw new ImportFileError("ZIP 中包含多个 llm-relay JSON 配置");
+  }
+  return configs[0];
+}
+
+function concatBytes(chunks: Uint8Array[], size: number): Uint8Array {
+  const combined = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined;
+}
+
+function parseJsonBytes(bytes: Uint8Array, errorMessage: string): unknown {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ImportFileError(errorMessage);
+  }
+  try {
+    return JSON.parse(text.replace(/^\uFEFF/, "")) as unknown;
+  } catch {
+    throw new ImportFileError(errorMessage);
+  }
 }
 
 export const dynamic = "force-dynamic";
